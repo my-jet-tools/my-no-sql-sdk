@@ -1,0 +1,1 @@
+mod test_enum_with_added_new_type;

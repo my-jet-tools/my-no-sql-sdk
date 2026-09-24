@@ -1,0 +1,20 @@
+[package]
+name = "my-no-sql-server-core"
+version = "0.5.1"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = []
+master-node = ["my-no-sql-core/master-node"]
+
+[dependencies]
+rust-extensions = { tag = "0.1.5", git = "https://github.com/MyJetTools/rust-extensions.git", features = [
+    "with-tokio",
+    "base64",
+
+] }
+tokio = { version = "*", features = ["full"] }
+arc-swap = "*"
+parking_lot = "*"
+my-no-sql-core = { path = "../my-no-sql-core" }

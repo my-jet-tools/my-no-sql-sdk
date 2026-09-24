@@ -1,0 +1,18 @@
+[package]
+name = "my-no-sql-tcp-shared"
+version = "0.5.1"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+my-tcp-sockets = { tag = "0.1.12", git = "https://github.com/my-jet-tools/my-tcp-sockets" }
+rust-extensions = { tag = "0.1.5", git = "https://github.com/MyJetTools/rust-extensions.git" }
+
+tokio = { version = "*", features = ["full"] }
+tokio-util = "*"
+parking_lot = "*"
+async-trait = "*"
+# Payload compression for the TCP protocol (see `payload_compressor`). Pure-Rust
+# zlib-rs backend: no C toolchain needed to build.
+flate2 = { version = "*", default-features = false, features = ["zlib-rs"] }

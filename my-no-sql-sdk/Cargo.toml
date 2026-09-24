@@ -1,0 +1,42 @@
+[package]
+name = "my-no-sql-sdk"
+version = "0.5.1"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = []
+data-writer = ["dep:my-no-sql-data-writer"]
+macros = ["dep:my-no-sql-macros", "dep:rust-extensions"]
+data-reader = ["dep:my-no-sql-tcp-reader"]
+tcp-contracts = ["dep:my-no-sql-tcp-shared"]
+master-node = [
+    "my-no-sql-core/master-node",
+    "my-no-sql-server-core/master-node",
+]
+
+read-node = ["my-no-sql-server-core"]
+
+debug_db_row = ["my-no-sql-core/debug_db_row"]
+with-ssh = ["my-no-sql-data-writer?/with-ssh"]
+
+# TLS for `https://` MyNoSql urls — see my-no-sql-data-writer. Only meaningful together
+# with `data-writer`; pick one. Without either, an https url panics at request time.
+with-rust-tls = ["my-no-sql-data-writer?/with-rust-tls"]
+with-ring-tls = ["my-no-sql-data-writer?/with-ring-tls"]
+
+
+[dependencies]
+
+my-no-sql-abstractions = { path = "../my-no-sql-abstractions" }
+my-no-sql-core = { path = "../my-no-sql-core" }
+my-no-sql-server-core = { path = "../my-no-sql-server-core", optional = true }
+
+my-no-sql-data-writer = { optional = true, path = "../my-no-sql-data-writer" }
+my-no-sql-macros = { optional = true, path = "../my-no-sql-macros" }
+my-no-sql-tcp-reader = { optional = true, path = "../my-no-sql-tcp-reader" }
+my-no-sql-tcp-shared = { optional = true, path = "../my-no-sql-tcp-shared" }
+
+rust-extensions = { optional = true, tag = "0.1.5", git = "https://github.com/MyJetTools/rust-extensions.git" }
+# my_no_sql::macros::my_no_sql_entity

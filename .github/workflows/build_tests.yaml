@@ -1,0 +1,49 @@
+name: Test it
+
+on:
+  push:
+    branches: [ "*" ]
+  pull_request:
+    branches: [ "*" ]
+
+jobs:
+
+  all-features_build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+
+      - name: Test default
+        run: cargo test
+
+      - name: Build Master-Node
+        run: cargo test --features master-node
+
+      - name: Build default
+        run: cargo build --all-features
+
+  windows_build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+
+      - name: Test default
+        run: cargo test
+
+      - name: Build Master-Node
+        run: cargo test --features master-node
+
+      - name: Build default
+        run: cargo build --all-features

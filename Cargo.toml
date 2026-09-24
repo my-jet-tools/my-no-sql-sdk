@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "my-no-sql-data-writer",
+    "my-no-sql-macros",
+    "my-no-sql-abstractions",
+    "my-no-sql-tcp-shared",
+    "my-no-sql-tcp-reader",
+    "my-no-sql-sdk",
+    "my-no-sql-core",
+    "my-no-sql-tests",
+    "my-no-sql-server-core",
+]

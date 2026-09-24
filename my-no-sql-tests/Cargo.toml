@@ -1,0 +1,16 @@
+[package]
+name = "my-no-sql-tests"
+version = "0.5.1"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "*", features = ["full"] }
+tokio-util = "*"
+async-trait = "*"
+my-no-sql-macros = { path = "../my-no-sql-macros" }
+serde = { version = "*", features = ["derive"] }
+my-no-sql-sdk = { path = "../my-no-sql-sdk" }
+
+my-no-sql-tcp-reader = { path = "../my-no-sql-tcp-reader" }
