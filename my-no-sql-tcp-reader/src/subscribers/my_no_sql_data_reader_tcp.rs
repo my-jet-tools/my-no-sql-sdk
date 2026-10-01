@@ -5,7 +5,6 @@ use my_json::json_reader::JsonArrayIterator;
 use my_no_sql_abstractions::{MyNoSqlEntity, MyNoSqlEntitySerializer};
 use my_no_sql_tcp_shared::sync_to_main::SyncToMainNodeHandler;
 use rust_extensions::{ApplicationStates, StrOrString};
-use serde::de::DeserializeOwned;
 use parking_lot::Mutex;
 
 use super::{
@@ -280,8 +279,7 @@ impl<TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send> Upda
 #[async_trait::async_trait]
 impl<TMyNoSqlEntity> MyNoSqlDataReader<TMyNoSqlEntity> for MyNoSqlDataReaderTcp<TMyNoSqlEntity>
 where
-    TMyNoSqlEntity:
-        MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send + DeserializeOwned + 'static,
+    TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send + 'static,
 {
     fn get_partition_keys(&self) -> Vec<String> {
         self.get_partition_keys()
