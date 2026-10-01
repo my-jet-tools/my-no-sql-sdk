@@ -32,12 +32,10 @@ pub struct TestEntity {
 
 With expiration
 ```rust
-#[my_no_sql_macros::my_no_sql_entity("test")]
+#[my_no_sql_macros::my_no_sql_entity(table_name:"test", with_expires:true)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TestEntity {
-    #[serde(rename = "Expires")]
-    expires: String,
 }
 ```
 
@@ -49,14 +47,14 @@ let connection = my_no_sql_tcp_reader::MyNoSqlTcpConnection::new(
     Arc::new(MyNoSqlTcpReaderSettings {}),
 );
 
-let reader: Arc<MyNoSqlDataReader<TestEntity>> = connection.get_reader().await;
+let reader: Arc<MyNoSqlDataReaderTcp<TestEntity>> = connection.get_reader();
     
-connection.start(my_logger::LOGGER.clone()).await;
+connection.start().await;
 ```
 
 ## 4. Get Records from reader
 ```rust
-let entity = reader.get_entity("partition_key", "row_key").await;
+let entity = reader.get_entity("partition_key", "row_key");
 println!("{:?}", entity);
 ```
 
