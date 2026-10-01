@@ -3,7 +3,7 @@ use std::sync::Arc;
 use my_no_sql_abstractions::{MyNoSqlEntity, MyNoSqlEntitySerializer};
 use rust_extensions::{
     events_loop::{EventsLoop, EventsLoopTick, RepeatIteration},
-    ApplicationStates,
+    AppStates,
 };
 
 use super::{LazyMyNoSqlEntity, MyNoSqlDataReaderCallBacks};
@@ -30,15 +30,17 @@ where
         TMyNoSqlDataReaderCallBacks: MyNoSqlDataReaderCallBacks<TMyNoSqlEntity> + Send + Sync + 'static,
     >(
         callbacks: Arc<TMyNoSqlDataReaderCallBacks>,
-        app_states: Arc<dyn ApplicationStates + Send + Sync + 'static>,
     ) -> Self {
         let events_loop_reader = MyNoSqlDataReaderCallBacksSender::new(callbacks, None);
-        let  events_loop = EventsLoop::new(
+        // The loop is started right here - there is nothing to wait for, so it gets
+        // application states which are initialized from the very beginning.
+        let events_loop = EventsLoop::new(
             "MyNoSqlDataReaderCallBacksPusher".to_string(),
-  
+            Arc::new(AppStates::create_initialized()),
+            my_logger::LOGGER.clone(),
         );
         events_loop.register_event_loop(Arc::new(events_loop_reader));
-        events_loop.start(app_states,  my_logger::LOGGER.clone(),);
+        events_loop.start();
         Self { events_loop }
     }
 

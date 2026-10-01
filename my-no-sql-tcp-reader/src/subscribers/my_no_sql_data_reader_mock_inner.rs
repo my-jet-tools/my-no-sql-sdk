@@ -5,7 +5,7 @@ use std::{
 
 use my_no_sql_abstractions::{MyNoSqlEntity, MyNoSqlEntitySerializer};
 use parking_lot::RwLock;
-use rust_extensions::{lazy::LazyVec, AppStates};
+use rust_extensions::lazy::LazyVec;
 
 use crate::MyNoSqlDataReaderCallBacks;
 
@@ -33,7 +33,6 @@ pub struct MyNoSqlDataReaderMockInner<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send + 'static,
 > {
     pub inner: RwLock<MyNoSqlDataReaderMockInnerData<TMyNoSqlEntity>>,
-    app_states: Arc<AppStates>,
 }
 
 impl<TMyNoSqlEntity> MyNoSqlDataReaderMockInner<TMyNoSqlEntity>
@@ -43,7 +42,6 @@ where
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(MyNoSqlDataReaderMockInnerData::new()),
-            app_states: Arc::new(AppStates::create_initialized()),
         }
     }
 
@@ -53,8 +51,7 @@ where
         &self,
         callbacks: Arc<TMyNoSqlDataReaderCallBacks>,
     ) {
-        let pusher =
-            MyNoSqlDataReaderCallBacksPusher::new(callbacks, self.app_states.clone());
+        let pusher = MyNoSqlDataReaderCallBacksPusher::new(callbacks);
 
         let mut write_access = self.inner.write();
         write_access.callbacks = Some(Arc::new(pusher));

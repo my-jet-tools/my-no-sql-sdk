@@ -8,7 +8,6 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use my_no_sql_abstractions::{MyNoSqlEntity, MyNoSqlEntitySerializer, Timestamp};
 use my_no_sql_tcp_shared::DeleteRowTcpContract;
 use parking_lot::Mutex;
-use rust_extensions::ApplicationStates;
 
 use crate::{
     subscribers::{LazyMyNoSqlEntity, MyNoSqlDataReaderCallBacks, MyNoSqlDataReaderCallBacksPusher},
@@ -59,18 +58,6 @@ fn entity(row_key: &str) -> LazyMyNoSqlEntity<TestEntity> {
         row_key: row_key.to_string(),
     }
     .into()
-}
-
-struct TestAppStates;
-
-impl ApplicationStates for TestAppStates {
-    fn is_initialized(&self) -> bool {
-        true
-    }
-
-    fn is_shutting_down(&self) -> bool {
-        false
-    }
 }
 
 /// Records what each callback was handed, as (partition_key, row_key) pairs.
@@ -126,10 +113,7 @@ impl MyNoSqlDataReaderCallBacks<TestEntity> for TestCallbacks {
 fn assign_callbacks(
     callbacks: Arc<TestCallbacks>,
 ) -> Option<Arc<MyNoSqlDataReaderCallBacksPusher<TestEntity>>> {
-    Some(Arc::new(MyNoSqlDataReaderCallBacksPusher::new(
-        callbacks,
-        Arc::new(TestAppStates),
-    )))
+    Some(Arc::new(MyNoSqlDataReaderCallBacksPusher::new(callbacks)))
 }
 
 fn insert_rows(

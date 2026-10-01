@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use my_json::json_reader::JsonArrayIterator;
 use my_no_sql_abstractions::{MyNoSqlEntity, MyNoSqlEntitySerializer};
 use my_no_sql_tcp_shared::sync_to_main::SyncToMainNodeHandler;
-use rust_extensions::{ApplicationStates, StrOrString};
+use rust_extensions::StrOrString;
 use parking_lot::Mutex;
 
 use super::{
@@ -41,15 +41,10 @@ impl<TMyNoSqlEntity> MyNoSqlDataReaderTcp<TMyNoSqlEntity>
 where
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send + 'static,
 {
-    pub fn new(
-        app_states: Arc<dyn ApplicationStates + Send + Sync + 'static>,
-        sync_handler: Arc<SyncToMainNodeHandler>,
-    ) -> Self {
+    pub fn new(sync_handler: Arc<SyncToMainNodeHandler>) -> Self {
         Self {
             inner: Arc::new(MyNoSqlDataReaderInner {
-                data: Mutex::new(
-                    MyNoSqlDataReaderData::new(TMyNoSqlEntity::TABLE_NAME, app_states),
-                ),
+                data: Mutex::new(MyNoSqlDataReaderData::new(TMyNoSqlEntity::TABLE_NAME)),
                 sync_handler,
             }),
         }
@@ -341,12 +336,7 @@ where
         &self,
         callbacks: Arc<TMyNoSqlDataReaderCallBacks>,
     ) {
-        let app_states = {
-            let reader = self.inner.data.lock();
-            reader.get_app_states().clone()
-        };
-        let pusher =
-            super::MyNoSqlDataReaderCallBacksPusher::new(callbacks, app_states);
+        let pusher = super::MyNoSqlDataReaderCallBacksPusher::new(callbacks);
         let mut write_access = self.inner.data.lock();
         write_access.set_callbacks(Arc::new(pusher));
     }

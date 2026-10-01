@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rust_extensions::{events_loop::EventsLoop, ApplicationStates, Logger};
+use rust_extensions::{events_loop::EventsLoop, AppStates, Logger};
 
 use super::{
     sync_to_main_node_handler_inner::SyncToMainNodeHandlerInner, DataReaderTcpConnection,
@@ -13,8 +13,14 @@ pub struct SyncToMainNodeHandler {
 }
 
 impl SyncToMainNodeHandler {
-    pub fn new() -> Self {
-        let events_loop = EventsLoop::new("SyncToMainNodeQueues".to_string());
+    pub fn new(logger: Arc<dyn Logger + Send + Sync + 'static>) -> Self {
+        // The loop is started by `start` - there is nothing to wait for, so it gets
+        // application states which are initialized from the very beginning.
+        let events_loop = EventsLoop::new(
+            "SyncToMainNodeQueues".to_string(),
+            Arc::new(AppStates::create_initialized()),
+            logger,
+        );
 
         let events_publisher = events_loop.get_publisher();
 
@@ -26,9 +32,9 @@ impl SyncToMainNodeHandler {
         }
     }
 
-    pub fn start(&self, logger: Arc<dyn Logger + Send + Sync + 'static>,app_states: Arc<dyn ApplicationStates + Send + Sync + 'static>) {
+    pub fn start(&self) {
         self.events_loop.register_event_loop(self.inner.clone());
-        self.events_loop.start(app_states, logger);
+        self.events_loop.start();
     }
 
     pub fn tcp_events_pusher_new_connection_established(

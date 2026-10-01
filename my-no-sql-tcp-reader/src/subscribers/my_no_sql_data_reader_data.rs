@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use my_no_sql_abstractions::{MyNoSqlEntity, MyNoSqlEntitySerializer};
-use rust_extensions::ApplicationStates;
 
 use crate::DataReaderEntitiesSet;
 
@@ -12,26 +11,17 @@ pub struct MyNoSqlDataReaderData<
 > {
     entities: DataReaderEntitiesSet<TMyNoSqlEntity>,
     callbacks: Option<Arc<MyNoSqlDataReaderCallBacksPusher<TMyNoSqlEntity>>>,
-    app_states: Arc<dyn ApplicationStates + Send + Sync + 'static>,
 }
 
 impl<TMyNoSqlEntity> MyNoSqlDataReaderData<TMyNoSqlEntity>
 where
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
 {
-    pub fn new(
-        table_name: &'static str,
-        app_states: Arc<dyn ApplicationStates + Send + Sync + 'static>,
-    ) -> Self {
+    pub fn new(table_name: &'static str) -> Self {
         Self {
             entities: DataReaderEntitiesSet::new(table_name),
             callbacks: None,
-            app_states,
         }
-    }
-
-    pub fn get_app_states(&self) -> &Arc<dyn ApplicationStates + Send + Sync + 'static> {
-        &self.app_states
     }
 
     pub fn set_callbacks(

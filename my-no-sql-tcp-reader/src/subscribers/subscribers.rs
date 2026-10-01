@@ -6,7 +6,6 @@ use std::{
 use arc_swap::ArcSwap;
 use my_no_sql_abstractions::{MyNoSqlEntity, MyNoSqlEntitySerializer};
 use my_no_sql_tcp_shared::sync_to_main::SyncToMainNodeHandler;
-use rust_extensions::ApplicationStates;
 
 use super::{MyNoSqlDataReaderTcp, UpdateEvent};
 
@@ -56,13 +55,12 @@ impl Subscribers {
 
     pub fn create_subscriber<TMyNoSqlEntity>(
         &self,
-        app_states: Arc<dyn ApplicationStates + Send + Sync + 'static>,
         sync_handler: Arc<SyncToMainNodeHandler>,
     ) -> Arc<MyNoSqlDataReaderTcp<TMyNoSqlEntity>>
     where
         TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send + 'static,
     {
-        let new_reader = MyNoSqlDataReaderTcp::new(app_states, sync_handler);
+        let new_reader = MyNoSqlDataReaderTcp::new(sync_handler);
         let new_reader = Arc::new(new_reader);
 
         let _guard = self.state.write_lock.lock().unwrap();
