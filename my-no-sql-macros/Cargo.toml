@@ -12,6 +12,6 @@ proc-macro = true
 types-reader = { tag = "0.5.1", git = "https://github.com/MyJetTools/types-reader.git" }
 
 
-syn = { version = "*", features = ["extra-traits"] }
+syn = { version = "3", features = ["extra-traits"] }
 quote = "*"
 proc-macro2 = "*"
