@@ -471,7 +471,12 @@ pub async fn reload_my_entities(app: Arc<AppContext>) {
 }
 ```
 
-### Registration — in main.rs after init, before start_application
+### Registration — before the connection starts
+
+Assign the callback between `MyNoSqlTcpConnection::get_reader()` and `MyNoSqlTcpConnection::start()`.
+The first snapshot is handed to the callbacks which are assigned when it arrives; a callback assigned
+after that gets only the changes which come later, and a cache filled by it stays empty until the
+table changes.
 
 ```rust
 use my_no_sql_sdk::reader::MyNoSqlDataReader;
@@ -479,6 +484,34 @@ use my_no_sql_sdk::reader::MyNoSqlDataReader;
 // assign_callback is sync — no .await
 app.my_entity_reader
     .assign_callback(Arc::new(MyEntityNoSqlCallback::new(app.clone())));
+```
+
+### The cache is filled after the reader
+
+The callbacks are delivered after the reader's own copy of the table has been updated — one at a time,
+from the reader's own events loop — and the full reload above runs in a `tokio::spawn` on top of that.
+`wait_until_first_data_arrives()` covers the reader's copy, not a cache filled from the callbacks: code
+which reads such a cache right after the first snapshot can find it empty.
+
+Until the cache has been loaded once, read from the reader — it holds the data by then:
+
+```rust
+pub async fn get_my_entities(app: &AppContext) -> Vec<MyEntity> {
+    {
+        let cache = app.cache.lock().await;
+        if cache.is_loaded() {
+            return cache.get_all();
+        }
+    }
+
+    // The first reload has not run yet — the reader has the data already
+    app.my_entity_reader
+        .get_by_partition_key_as_vec(MyEntityNoSqlEntity::PARTITION_KEY)
+        .unwrap_or_default()
+        .iter()
+        .map(|e| e.as_ref().into())
+        .collect()
+}
 ```
 
 ### Rules (in case of full reload to local cache)
@@ -489,4 +522,6 @@ app.my_entity_reader
 | Reload script takes `Arc<AppContext>` (owned) | Required for `tokio::spawn` — move semantics |
 | **ALWAYS** full reload, not incremental | Simpler, more reliable, no edge cases with event ordering |
 | Callback lives in `scripts/` | Not a flow — no HTTP/gRPC context |
-| Cache must have a `reload_all` method | Clears and re-populates from an iterator |
+| Cache must have a `reload_all` method | Clears and re-populates from an iterator, and marks the cache as loaded |
+| Read from the reader until the cache is loaded once | The cache is filled after the reader: right after the first snapshot it can still be empty |
+| Assign the callback before the connection starts | A callback assigned after the first snapshot does not get it |
