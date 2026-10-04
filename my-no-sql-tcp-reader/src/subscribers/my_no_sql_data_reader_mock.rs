@@ -22,9 +22,22 @@ where
         }
     }
 
+    /// Writes the rows to the copy. The assigned callbacks get them the way they get the rows of
+    /// an `UpdateRows` packet from the tcp reader: one `inserted_or_replaced` call per partition,
+    /// made from the events loop of the callbacks - a test has to wait for it.
+    ///
+    /// The rows are handed over as `LazyMyNoSqlEntity::Deserialized` - the rows of an entity with
+    /// lazy deserialization as well, which the tcp reader may hand over as `Raw`.
+    ///
+    /// The events loop lives in the Tokio runtime `assign_callback` was called in. Once that
+    /// runtime is gone there is nobody to make the calls: an `update` or a `delete` which has
+    /// rows to report panics, after it has changed the copy.
     pub fn update(&self, items: impl Iterator<Item = Arc<TMyNoSqlEntity>>) {
         self.inner.update(items);
     }
+    /// Removes the rows - (partition key, row key) pairs - from the copy. The assigned callbacks
+    /// get the ones which were there the way they get the rows of a `DeleteRows` packet from the
+    /// tcp reader: one `deleted` call per partition, made from the same events loop.
     pub fn delete(&self, to_delete: impl Iterator<Item = (String, String)>) {
         self.inner.delete(to_delete);
     }

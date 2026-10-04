@@ -96,8 +96,8 @@ impl<TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'st
         entities.insert(partition_key.to_string(), new_partition);
 
         InitPartitionResult {
-            partition_before: entities.get(partition_key).unwrap(),
-            partition_now: before_partition,
+            partition_now: entities.get(partition_key).unwrap(),
+            partition_before: before_partition,
         }
     }
 
@@ -202,6 +202,8 @@ pub struct InitPartitionResult<
     's,
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
 > {
-    pub partition_before: &'s BTreeMap<String, LazyMyNoSqlEntity<TMyNoSqlEntity>>,
-    pub partition_now: Option<BTreeMap<String, LazyMyNoSqlEntity<TMyNoSqlEntity>>>,
+    /// The partition which is in the table now - the one `init_partition` has put there.
+    pub partition_now: &'s BTreeMap<String, LazyMyNoSqlEntity<TMyNoSqlEntity>>,
+    /// The partition it has replaced. `None` if the table had no such partition.
+    pub partition_before: Option<BTreeMap<String, LazyMyNoSqlEntity<TMyNoSqlEntity>>>,
 }

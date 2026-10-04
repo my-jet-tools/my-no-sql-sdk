@@ -25,6 +25,9 @@ jobs:
       - name: Build Master-Node
         run: cargo test --features master-node
 
+      - name: Test reader mocks
+        run: cargo test -p my-no-sql-tcp-reader --features mocks
+
       - name: Build default
         run: cargo build --all-features
 
@@ -44,6 +47,9 @@ jobs:
 
       - name: Build Master-Node
         run: cargo test --features master-node
+
+      - name: Test reader mocks
+        run: cargo test -p my-no-sql-tcp-reader --features mocks
 
       - name: Build default
         run: cargo build --all-features

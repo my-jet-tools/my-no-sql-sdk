@@ -1,8 +1,9 @@
 //! The reader keeps its own index, keyed by the strings the rows report. A row which arrived
-//! over tcp is held as [`LazyMyNoSqlEntity::Raw`] - its keys come out of the raw json - while a
-//! mocked one is already deserialized and reports the keys off the struct. Both have to produce
-//! the same, logical, key: the master sends delete events by that key, and a mismatch would
-//! leave a deleted row in the reader's cache forever.
+//! over tcp for a table with lazy deserialization is held as [`LazyMyNoSqlEntity::Raw`] - its
+//! keys come out of the raw json - while a mocked one (like a row of a table without lazy
+//! deserialization) is already deserialized and reports the keys off the struct. Both have to
+//! produce the same, logical, key: the master sends delete events by that key, and a mismatch
+//! would leave a deleted row in the reader's cache forever.
 
 use std::{collections::BTreeMap, sync::Arc};
 

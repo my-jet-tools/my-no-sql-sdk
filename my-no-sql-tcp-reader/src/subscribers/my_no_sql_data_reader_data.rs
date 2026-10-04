@@ -53,13 +53,26 @@ where
     ) {
         let init_partition_result = self.entities.init_partition(partition_key, src_entities);
 
+        // An InitPartition without rows is how the server reports a partition which is gone -
+        // deleted as a whole, or left by its last row.
+        let partition_is_gone = init_partition_result.partition_now.is_empty();
+
         if let Some(callbacks) = self.callbacks.as_ref() {
             super::callback_triggers::trigger_partition_difference_sync(
                 callbacks.as_ref(),
                 partition_key,
-                init_partition_result.partition_now,
                 init_partition_result.partition_before,
+                init_partition_result.partition_now,
             );
+        }
+
+        // It is not kept as an empty one - `delete_rows` does not keep a partition it has
+        // emptied either - so the reads answer the way they do for a partition which was never
+        // there, and deleted partitions do not pile up in the copy.
+        if partition_is_gone {
+            if let Some(entities) = self.entities.as_mut() {
+                entities.remove(partition_key);
+            }
         }
     }
 

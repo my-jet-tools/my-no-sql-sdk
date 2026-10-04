@@ -73,19 +73,20 @@ pub enum MyNoSqlTcpContract {
         confirmation_id: i64,
     },
     /// Fixes the namespace of the connection. Has to be sent right after the Greeting and
-    /// before any Subscribe. A server which knows nothing about namespaces answers with
-    /// `InvalidPacketId` and breaks the connection - which is exactly what we want, since
-    /// falling back to the default namespace silently would read the wrong data.
+    /// before any Subscribe. A server which knows nothing about namespaces fails to read the
+    /// packet (`InvalidPacketId`) and breaks the connection - which is exactly what we want,
+    /// since falling back to the default namespace silently would read the wrong data.
     SetNamespace {
         namespace: String,
     },
     /// A `Ping` which carries the round trip of the previous Ping → Pong, measured by the
-    /// subscriber (a reader or a node). Every keep-alive ping after the first one is sent this
-    /// way - see [`crate::MyNoSqlReaderTcpSerializer`]. The server treats it exactly as a `Ping`:
-    /// answers with `Pong` and keeps the number as the latency of the connection.
+    /// subscriber (a reader or a node). Every keep-alive ping sent after the first Pong of the
+    /// connection goes out this way - see [`crate::MyNoSqlReaderTcpSerializer`]. The server
+    /// treats it exactly as a `Ping`: answers with `Pong` and keeps the number as the latency of
+    /// the connection.
     ///
-    /// A server which predates the packet answers `InvalidPacketId` and drops the connection -
-    /// servers and nodes are upgraded before the subscribers which ping them.
+    /// A server which predates the packet fails to read it (`InvalidPacketId`) and drops the
+    /// connection - servers and nodes are upgraded before the subscribers which ping them.
     PingWithLatency {
         micros: u64,
     },

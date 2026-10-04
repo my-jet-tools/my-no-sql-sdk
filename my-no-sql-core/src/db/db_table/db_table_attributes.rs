@@ -72,7 +72,7 @@ impl DbTableAttributes {
         return result;
     }
 
-    /// Toggles the in-memory compression flag. Returns true if the value changed
+    /// Sets the in-memory compression flag. Returns true if the value changed
     /// (the caller is then responsible for re-encoding the already stored rows).
     pub fn set_compressed(&mut self, compressed: bool) -> bool {
         if self.compressed == compressed {

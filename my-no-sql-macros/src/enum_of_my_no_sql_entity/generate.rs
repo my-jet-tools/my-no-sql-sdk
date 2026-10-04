@@ -148,7 +148,15 @@ fn get_serialize_cases(enum_cases: &[EnumCase]) -> Result<proc_macro2::TokenStre
     for enum_case in enum_cases {
         let enum_case_ident = enum_case.get_name_ident();
 
-        let model = enum_case.model.as_ref().unwrap();
+        let model = match enum_case.model.as_ref() {
+            Some(model) => model,
+            None => {
+                return Err(syn::Error::new_spanned(
+                    enum_case_ident,
+                    "Enum case must have a model",
+                ))
+            }
+        };
         let model_ident = model.get_name_ident();
 
         result.extend(quote::quote! {
@@ -163,13 +171,43 @@ fn get_deserialize_cases(enum_cases: &[EnumCase]) -> Result<proc_macro2::TokenSt
     let mut result = Vec::new();
 
     result.push(quote::quote! {
-        let entity = my_no_sql_sdk::core::db_json_entity::DbJsonEntity::from_slice(src).unwrap();
+        use my_no_sql_sdk::abstractions::MyNoSqlEntity;
+
+        // The body can be anything - a proxy may answer in the server's place. What is not
+        // an entity is an error, in the words a struct entity reports it with
+        let entity = match my_no_sql_sdk::core::db_json_entity::DbJsonEntity::from_slice(src) {
+            Ok(entity) => entity,
+            Err(err) => {
+                return Err(format!(
+                    "Table: {}. Can not extract partitionKey and rowKey. Looks like entity broken at all. Err: {:?}",
+                    Self::TABLE_NAME, err
+                ))
+            }
+        };
 
         // Which case this is, is a question about the keys - answered against the payload
         // as it lies, without building the keys as strings
         let entity_partition_key = entity.partition_key_value(src);
         let entity_row_key = entity.row_key_value(src);
+
+        // A model does not know which table it is a case of - `#[enum_model]` gives it an
+        // empty TABLE_NAME, and that is the table its error names when the row does not
+        // parse. The enum knows the table, so the name is put in here
+        let name_the_table = |err: String| {
+            format!(
+                "Table: {}. {}",
+                Self::TABLE_NAME,
+                err.strip_prefix("Table: . ").unwrap_or(err.as_str())
+            )
+        };
     });
+
+    // A case which names both keys and a case which is a whole partition can share the
+    // partition, and a row of the first one then fits the second one as well. So the cases
+    // with both keys are asked first, whatever the order of declaration. Which of the two
+    // a case is, is known to its model only (`ROW_KEY`) - so each case gets a check in both
+    // rounds, and the one which is not its own never matches
+    let mut cases_of_a_whole_partition = Vec::new();
 
     for enum_case in enum_cases {
         let enum_case_ident = enum_case.get_name_ident();
@@ -181,15 +219,19 @@ fn get_deserialize_cases(enum_cases: &[EnumCase]) -> Result<proc_macro2::TokenSt
 
                     if let Some(row_key) = #model_ident::ROW_KEY{
                         if entity_partition_key.eq_with_str(#model_ident::PARTITION_KEY) && entity_row_key.eq_with_str(row_key) {
-                            let item = #model_ident::deserialize_entity(src)?;
+                            let item = #model_ident::deserialize_entity(src).map_err(name_the_table)?;
                             return Ok(Self::#enum_case_ident(item));
                         }
-                    }else{
-                        if entity_partition_key.eq_with_str(#model_ident::PARTITION_KEY) {
-                            let item = #model_ident::deserialize_entity(src)?;
-                            return Ok(Self::#enum_case_ident(item));
-                        }
+                    }
+                });
 
+                cases_of_a_whole_partition.push(quote::quote! {
+
+                    if #model_ident::ROW_KEY.is_none() {
+                        if entity_partition_key.eq_with_str(#model_ident::PARTITION_KEY) {
+                            let item = #model_ident::deserialize_entity(src).map_err(name_the_table)?;
+                            return Ok(Self::#enum_case_ident(item));
+                        }
                     }
                 });
             }
@@ -202,8 +244,9 @@ fn get_deserialize_cases(enum_cases: &[EnumCase]) -> Result<proc_macro2::TokenSt
         }
     }
 
+    result.extend(cases_of_a_whole_partition);
+
     result.push(quote::quote!{
-        use my_no_sql_sdk::abstractions::MyNoSqlEntity;
         Err(format!("Table: '{}'. Unknown Enum Case for the record with PartitionKey: {} and RowKey: {}", Self::TABLE_NAME, entity_partition_key, entity_row_key))
     });
 
@@ -290,3 +333,21 @@ fn generate_into_for_each_case(enum_name_ident: &syn::Ident, enum_cases: &[EnumC
 }
 
 
+#[cfg(test)]
+mod tests {
+    use types_reader::EnumCase;
+
+    /// A unit case used to take the whole macro down - "custom attribute panicked" - before
+    /// the check which has an error to show at the case was reached.
+    #[test]
+    fn a_case_without_a_model_is_an_error_and_not_a_panic() {
+        let ast: syn::DeriveInput =
+            syn::parse_str("pub enum MyEntity { WithModel(Model), Unit }").unwrap();
+
+        let enum_cases = EnumCase::read(&ast).unwrap();
+
+        let err = super::get_serialize_cases(&enum_cases).unwrap_err();
+
+        assert_eq!("Enum case must have a model", err.to_string());
+    }
+}

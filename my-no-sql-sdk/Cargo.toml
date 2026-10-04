@@ -39,4 +39,4 @@ my-no-sql-tcp-reader = { optional = true, path = "../my-no-sql-tcp-reader" }
 my-no-sql-tcp-shared = { optional = true, path = "../my-no-sql-tcp-shared" }
 
 rust-extensions = { optional = true, tag = "0.1.5", git = "https://github.com/MyJetTools/rust-extensions.git" }
-# my_no_sql::macros::my_no_sql_entity
+# Enabled by the `macros` feature and re-exported as `my_no_sql_sdk::rust_extensions`.

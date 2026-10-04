@@ -14,7 +14,8 @@ pub struct RowToDeleteIf {
     pub partition_key: String,
     pub row_key: String,
     /// The `TimeStamp` the row was read with. A default one is not a version the server can
-    /// read and makes the whole batch fail with HTTP 400.
+    /// read and makes the whole batch fail with HTTP 400 (a `debug_assert!` panic in a debug
+    /// build).
     pub time_stamp: Timestamp,
 }
 
@@ -91,8 +92,8 @@ pub struct SkippedRow {
 
 /// The answer of `POST /api/Bulk/DeleteIf`: a partial success. The rows which were still at
 /// the version they were read at are gone; every other one stayed in place and is listed in
-/// [`Self::skipped`]. This is never an error - a conflict inside a batch is data, not a
-/// failure of the request (unlike the single-row delete, which answers 409).
+/// [`Self::skipped`]. A version mismatch is never an error - a conflict inside a batch is data,
+/// not a failure of the request (unlike the single-row delete, which answers 409).
 #[derive(Debug, Clone)]
 pub struct BulkDeleteIfResult {
     /// How many rows really left the table.
@@ -118,7 +119,7 @@ impl BulkDeleteIfResult {
         self.skipped.is_empty()
     }
 
-    /// The rows which are still in the table at a newer version - the ones worth re-reading
+    /// The rows which are still in the table at another version - the ones worth re-reading
     /// and deciding about again.
     pub fn conflicts(&self) -> impl Iterator<Item = &SkippedRow> {
         self.skipped
@@ -135,7 +136,8 @@ impl BulkDeleteIfResult {
     }
 
     /// Whether anything was rewritten under us. `false` with a non-empty
-    /// [`Self::skipped`] means the leftovers are only rows which were already gone.
+    /// [`Self::skipped`] means none of the leftovers is a version conflict: they are rows which
+    /// were already gone, or rows skipped for a [`DeleteIfSkipReason::Unknown`] reason.
     pub fn has_conflicts(&self) -> bool {
         self.conflicts().next().is_some()
     }

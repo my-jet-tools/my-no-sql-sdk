@@ -1,8 +1,8 @@
 use rust_extensions::date_time::DateTimeAsMicroseconds;
 
 /// Longest a canonical `TimeStamp` can get: `2026-08-09T16:44:39.540412`, all six
-/// fractional digits significant. Shorter values are the norm - the fraction is
-/// trimmed of its trailing zeros, and drops out entirely on a whole second.
+/// fractional digits significant. A value is shorter when its fraction ends in zeros -
+/// they are trimmed, and the fraction drops out entirely on a whole second.
 pub const TIME_STAMP_STR_MAX_LEN: usize = 26;
 
 /// Canonical `TimeStamp` spelling: microsecond precision, trailing zeros of the
@@ -185,8 +185,8 @@ mod tests {
         }
     }
 
-    /// Whatever a client sends - any amount of fractional digits, any zone spelling -
-    /// has to land on the same moment.
+    /// Whatever a client sends - any amount of fractional digits, any spelling of the UTC
+    /// zone (`Z`, `+00:00`, none) - has to land on the same moment.
     #[test]
     fn parse_accepts_every_spelling_of_the_same_moment() {
         let expected = dt("2026-08-09T16:44:39.540000").unix_microseconds;

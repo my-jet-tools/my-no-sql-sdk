@@ -121,11 +121,17 @@ pub fn compile_struct_with_new_fields(
     }
 
     if render_expires {
+        // A default (unset) `expires` means the row does not expire, and such a row has no
+        // `Expires` at all - it is left out of the json the way a default `time_stamp` is
+        // (see `get_time_stamp_token`) instead of going as `"Expires":null`
         structure_fields.push(quote::quote! {
             #[serde(rename="Expires")]
+            #[serde(skip_serializing_if = "my_no_sql_sdk::abstractions::skip_timestamp_serializing")]
             pub expires: my_no_sql_sdk::abstractions::Timestamp,
         });
     }
+
+    let time_stamp = get_time_stamp_token();
 
     // #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
     let result = quote! {
@@ -136,9 +142,7 @@ pub fn compile_struct_with_new_fields(
             pub partition_key: String,
             #[serde(rename="RowKey")]
             pub row_key: String,
-            #[serde(rename="TimeStamp")]
-            #[serde(skip_serializing_if = "my_no_sql_sdk::abstractions::skip_timestamp_serializing")]
-            pub time_stamp: my_no_sql_sdk::abstractions::Timestamp,
+            #time_stamp
             #(#structure_fields)*
         }
     };
@@ -178,9 +182,18 @@ pub fn get_row_key_token() -> proc_macro2::TokenStream {
         pub row_key: String,
     }
 }
+
+/// The `time_stamp` field of a generated entity - `#[my_no_sql_entity]` and `#[enum_model]`
+/// both take it from here, so it goes on the wire the same way for both.
+///
+/// A default (unset) `Timestamp` is left out of the json instead of going as
+/// `"TimeStamp":null`. A server built before my-no-sql-core stopped reading a `null` as a text
+/// takes it for a version it can not read and makes `Replace` answer 409, where a missing one
+/// gets the 400 which says what is wrong; a newer server answers that 400 for both.
 pub fn get_time_stamp_token() -> proc_macro2::TokenStream {
     quote::quote! {
         #[serde(rename = "TimeStamp")]
+        #[serde(skip_serializing_if = "my_no_sql_sdk::abstractions::skip_timestamp_serializing")]
         pub time_stamp: my_no_sql_sdk::abstractions::Timestamp,
     }
 }

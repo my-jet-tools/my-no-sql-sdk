@@ -6,6 +6,13 @@ use super::{LazyMyNoSqlEntity, MyNoSqlDataReaderCallBacksPusher};
 #[cfg(test)]
 use super::MyNoSqlDataReaderCallBacks;
 
+/// Tells the callbacks what an `InitTable` packet did to the table, partition by partition.
+///
+/// A partition of the new table gets at most one `inserted_or_replaced` call, with every row it
+/// holds now. When the reader had a table before the packet, that is done by
+/// [`trigger_partition_difference_sync`], which also reports the rows the partition has lost; and
+/// a partition which is not in the new table at all is reported by a `deleted` call with the rows
+/// it held. No call is made with an empty list of rows.
 pub fn trigger_table_difference_sync<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
 >(
@@ -49,6 +56,15 @@ pub fn trigger_table_difference_sync<
     }
 }
 
+/// Tells the callbacks what a new snapshot of a partition did to it. The snapshot is an
+/// `InitPartition` packet, or one partition of an `InitTable` packet for a table the reader
+/// already has.
+///
+/// There is at most one `inserted_or_replaced` call and at most one `deleted` call:
+/// `inserted_or_replaced` is given every row of the snapshot, the ones which did not change
+/// included - a row is not compared with the one it replaces - and `deleted` is given the rows
+/// which were in the partition before and are not in the snapshot. No call is made with an empty
+/// list of rows.
 pub fn trigger_partition_difference_sync<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
 >(
@@ -59,13 +75,14 @@ pub fn trigger_partition_difference_sync<
 ) {
     match before_partition {
         Some(mut before_partition) => {
+            // One list for the whole partition - a list per row is a callback per row.
+            let mut inserted_or_replaced = Vec::new();
             for (now_row_key, now_row) in now_partition {
-                let mut inserted_or_replaced = Vec::new();
                 before_partition.remove(now_row_key);
                 inserted_or_replaced.push(now_row.clone());
-                if inserted_or_replaced.len() > 0 {
-                    pusher.inserted_or_replaced(partition_key, inserted_or_replaced);
-                }
+            }
+            if inserted_or_replaced.len() > 0 {
+                pusher.inserted_or_replaced(partition_key, inserted_or_replaced);
             }
 
             let mut deleted_entities = Vec::new();
@@ -175,9 +192,9 @@ pub async fn trigger_partition_difference<
 ) {
     match before_partition {
         Some(mut before_partition) => {
-            for (now_row_key, now_row) in now_partition {
-                let mut inserted_or_replaced = Vec::new();
+            let mut inserted_or_replaced = Vec::new();
 
+            for (now_row_key, now_row) in now_partition {
                 match before_partition.remove(now_row_key) {
                     Some(_) => {
                         inserted_or_replaced.push(now_row.clone());
@@ -186,11 +203,11 @@ pub async fn trigger_partition_difference<
                         inserted_or_replaced.push(now_row.clone());
                     }
                 }
+            }
 
-                if inserted_or_replaced.len() > 0 {
-                    callbacks
-                        .inserted_or_replaced(partition_key, inserted_or_replaced);
-                }
+            if inserted_or_replaced.len() > 0 {
+                callbacks
+                    .inserted_or_replaced(partition_key, inserted_or_replaced);
             }
 
             let mut deleted_entities = Vec::new();

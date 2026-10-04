@@ -9,7 +9,7 @@ use rust_extensions::lazy::LazyVec;
 
 use crate::MyNoSqlDataReaderCallBacks;
 
-use super::MyNoSqlDataReaderCallBacksPusher;
+use super::{LazyMyNoSqlEntity, MyNoSqlDataReaderCallBacksPusher};
 
 pub struct MyNoSqlDataReaderMockInnerData<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send + 'static,
@@ -59,9 +59,25 @@ where
 
     pub fn update(&self, items: impl Iterator<Item = Arc<TMyNoSqlEntity>>) {
         let mut write_access = self.inner.write();
+
+        // The callbacks are told what the tcp reader tells them on an UpdateRows packet: the
+        // rows written, one call per partition.
+        let mut updates = if write_access.callbacks.is_some() {
+            Some(BTreeMap::new())
+        } else {
+            None
+        };
+
         for item in items {
             let partition_key = item.get_partition_key();
             let row_key = item.get_row_key();
+
+            if let Some(updates) = updates.as_mut() {
+                updates
+                    .entry(partition_key.to_string())
+                    .or_insert_with(Vec::new)
+                    .push(LazyMyNoSqlEntity::Deserialized(item.clone()));
+            }
 
             let partition = write_access
                 .items
@@ -69,14 +85,38 @@ where
                 .or_insert_with(BTreeMap::new);
             partition.insert(row_key.to_string(), item);
         }
+
+        // Queued before the lock is released - the calls come in the order of the changes.
+        if let Some(callbacks) = write_access.callbacks.as_ref() {
+            if let Some(updates) = updates {
+                for (partition_key, rows) in updates {
+                    callbacks.inserted_or_replaced(partition_key.as_str(), rows);
+                }
+            }
+        }
     }
     pub fn delete(&self, to_delete: impl Iterator<Item = (String, String)>) {
         let mut write_access = self.inner.write();
 
+        // The same for a DeleteRows packet: the rows removed, one call per partition.
+        let mut deleted_rows = if write_access.callbacks.is_some() {
+            Some(BTreeMap::new())
+        } else {
+            None
+        };
+
         let mut partitions_to_remove = HashSet::new();
         for (partition_key, row_key) in to_delete {
             if let Some(partition) = write_access.items.get_mut(&partition_key) {
-                partition.remove(&row_key);
+                // A row which is not there is not a delete - and is not reported as one.
+                if let Some(removed) = partition.remove(&row_key) {
+                    if let Some(deleted_rows) = deleted_rows.as_mut() {
+                        deleted_rows
+                            .entry(partition_key.to_string())
+                            .or_insert_with(Vec::new)
+                            .push(LazyMyNoSqlEntity::Deserialized(removed));
+                    }
+                }
             }
 
             if let Some(partition) = write_access.items.get(partition_key.as_str()) {
@@ -88,6 +128,14 @@ where
 
         for partition_to_remove in partitions_to_remove {
             write_access.items.remove(partition_to_remove.as_str());
+        }
+
+        if let Some(callbacks) = write_access.callbacks.as_ref() {
+            if let Some(partitions) = deleted_rows {
+                for (partition_key, rows) in partitions {
+                    callbacks.deleted(partition_key.as_str(), rows);
+                }
+            }
         }
     }
 
@@ -131,22 +179,25 @@ where
         result.get_result()
     }
 
+    /// The rows of the partition the filter lets through. `None` - there is no such partition;
+    /// a partition none of whose rows passed the filter is `Some` of an empty list. That is
+    /// what the tcp reader answers, and the mock stands for it in a test.
     pub fn get_by_partition_key_as_vec_with_filter(
         &self,
         partition_key: &str,
         filter: impl Fn(&TMyNoSqlEntity) -> bool,
     ) -> Option<Vec<Arc<TMyNoSqlEntity>>> {
         let read_access = self.inner.read();
-        let mut result = LazyVec::new();
-        if let Some(partition) = read_access.items.get(partition_key) {
-            for item in partition.values() {
-                if filter(item) {
-                    result.add(item.clone());
-                }
+        let partition = read_access.items.get(partition_key)?;
+
+        let mut result = Vec::new();
+        for item in partition.values() {
+            if filter(item) {
+                result.push(item.clone());
             }
         }
 
-        result.get_result()
+        Some(result)
     }
 
     pub fn get_entity(

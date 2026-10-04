@@ -103,7 +103,7 @@ fn a_key_with_escapes_is_owned() {
     assert!(!raw.contains(&db_row.get_row_key().as_ptr()));
 }
 
-/// Two json spellings of one logical key - `a\\b` and the same backslash written as `\` -
+/// Two json spellings of one logical key - `a\\b` and the same backslash written as `\u005C` -
 /// so the second write replaces the first one instead of creating a twin row.
 #[test]
 fn two_json_spellings_of_one_key_are_a_single_row() {

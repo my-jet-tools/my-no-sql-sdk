@@ -60,7 +60,7 @@ fn entity(row_key: &str) -> LazyMyNoSqlEntity<TestEntity> {
     .into()
 }
 
-/// Records what each callback was handed, as (partition_key, row_key) pairs.
+/// Records what the `deleted` callback was handed, as (partition_key, row_key) pairs.
 struct TestCallbacks {
     deleted: Mutex<Vec<(String, String)>>,
 }

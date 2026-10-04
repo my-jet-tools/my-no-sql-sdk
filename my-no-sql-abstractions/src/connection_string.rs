@@ -73,8 +73,9 @@ impl std::error::Error for ConnectionStringError {}
 /// Parses a connection string of both formats:
 ///
 /// * starts with `host=` - the new format: `;` separated `key=value` pairs, e.g.
-///   `host=http://localhost:5123;ns=alpha`. Spaces around `;` and `=` are trimmed, keys are
-///   case insensitive, `host` is mandatory, `ns` is optional and an unknown key is an error -
+///   `host=http://localhost:5123;ns=alpha`. Spaces around `;` and `=` are trimmed, empty
+///   elements are skipped (a stray `;` in front of `host=` as well), keys are case
+///   insensitive, `host` is mandatory, `ns` is optional and an unknown key is an error -
 ///   it is better not to start at all than to silently read the wrong namespace;
 /// * anything else - the legacy format: the whole string is the host and the namespace is the
 ///   default one (`http://xxx`, `10.0.0.1:5123`).
@@ -142,9 +143,11 @@ pub fn parse_connection_string(src: &str) -> Result<ConnectionString, Connection
 }
 
 /// New format is detected by the very first `key=value` pair having the `host` key - everything
-/// else stays the legacy host as it always was.
+/// else stays the legacy host as it always was. Empty elements are passed over, the same way
+/// the parser skips them - a stray `;` in front must not turn the string into a legacy host and
+/// drop its namespace silently.
 fn is_new_format(src: &str) -> bool {
-    let first_token = match src.split(';').next() {
+    let first_token = match src.split(';').find(|token| !token.trim().is_empty()) {
         Some(token) => token,
         None => return false,
     };
@@ -237,6 +240,45 @@ mod test {
 
         assert_eq!("http://localhost:5123", result.host);
         assert_eq!(Some("alpha".to_string()), result.namespace);
+    }
+
+    #[test]
+    fn test_empty_elements_in_front_of_the_host_key_do_not_make_the_string_a_legacy_one() {
+        for src in [
+            ";host=http://localhost:5123;ns=alpha",
+            ";;host=http://localhost:5123;ns=alpha",
+            " ; host=http://localhost:5123;ns=alpha",
+        ] {
+            let result = parse_connection_string(src).unwrap();
+
+            assert_eq!("http://localhost:5123", result.host, "{}", src);
+            assert_eq!(Some("alpha".to_string()), result.namespace, "{}", src);
+        }
+    }
+
+    #[test]
+    fn test_string_with_an_empty_element_in_front_is_checked_as_the_new_format() {
+        // Read as a legacy host it would start with the default namespace and say nothing
+        let result = parse_connection_string(";host=http://localhost:5123;namespace=alpha");
+
+        assert_eq!(
+            Err(ConnectionStringError::UnknownKey("namespace".to_string())),
+            result
+        );
+    }
+
+    #[test]
+    fn test_empty_elements_between_and_after_the_pairs_are_skipped() {
+        for src in [
+            "host=http://localhost:5123;;ns=alpha",
+            "host=http://localhost:5123; ;ns=alpha",
+            "host=http://localhost:5123;ns=alpha;;",
+        ] {
+            let result = parse_connection_string(src).unwrap();
+
+            assert_eq!("http://localhost:5123", result.host, "{}", src);
+            assert_eq!(Some("alpha".to_string()), result.namespace, "{}", src);
+        }
     }
 
     #[test]

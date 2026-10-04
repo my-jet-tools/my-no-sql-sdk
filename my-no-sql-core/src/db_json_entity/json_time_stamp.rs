@@ -25,6 +25,10 @@ impl JsonTimeStamp {
     /// not parse. Whatever the client sent, the value is stored in the canonical form -
     /// comparison is numeric anyway, and nothing outside can push a stray spelling into
     /// the row.
+    ///
+    /// Not for a `TimeStamp` which is the row's version: there a value which does not
+    /// parse has to be refused, never replaced by the clock - see
+    /// [`super::DbJsonEntity::parse_into_db_row_and_keep_date_time`].
     pub fn parse_or_now(src: &str) -> Self {
         match parse_time_stamp(src) {
             Some(date_time) => Self::from_date_time(date_time),

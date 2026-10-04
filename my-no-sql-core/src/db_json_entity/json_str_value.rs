@@ -6,7 +6,7 @@ use rust_extensions::StrOrString;
 /// The two forms are not interchangeable and mixing them up is what makes a row unreachable:
 ///
 /// * **raw** - the characters between the quotes of the payload, escape sequences unresolved.
-///   `demo\DIRNG` travels as `demo\\DIRNG`, `д` may travel as `д`. One value has many
+///   `demo\DIRNG` travels as `demo\\DIRNG`, `д` may travel as `\u0434`. One value has many
 ///   valid raw spellings, so raw is what you store and transmit, never what you compare or
 ///   index by.
 /// * **value** - the string those characters stand for. This is what the caller passed as
@@ -190,7 +190,8 @@ impl<'s> Iterator for DeEscapedChars<'s> {
                 // ...and neither is a lone low one
                 Some(code) if (0xDC00..=0xDFFF).contains(&code) => Some('\u{FFFD}'),
                 Some(code) => Some(char::from_u32(code).unwrap_or('\u{FFFD}')),
-                // a truncated \uXXXX stays in the text as it is
+                // a truncated or non-hex \uXXXX keeps only its `\u` marker - whatever was
+                // consumed while reading the digits is dropped
                 None => {
                     self.pending = Some('u');
                     Some('\\')

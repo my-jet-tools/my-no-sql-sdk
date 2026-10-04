@@ -12,7 +12,9 @@ pub struct MyNoSqlDataWriterWithRetries<TEntity: MyNoSqlEntity + Sync + Send> {
     fl_url_factory: FlUrlFactory,
     sync_period: DataSynchronizationPeriod,
     phantom: PhantomData<TEntity>,
-    max_attempts: usize,
+    /// How many more times a request which got no response is sent - the attempts after the
+    /// first one, which is what `FlUrl::with_retries` takes.
+    retries: usize,
 }
 
 impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
@@ -21,37 +23,38 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
     pub fn new(
         fl_url_factory: FlUrlFactory,
         sync_period: DataSynchronizationPeriod,
-        max_attempts: usize,
+        retries: usize,
     ) -> Self {
         Self {
             phantom: PhantomData,
             sync_period,
 
-            max_attempts,
+            retries,
             fl_url_factory,
         }
     }
 
     pub async fn insert_entity(&self, entity: &TEntity) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::insert_entity(fl_url, entity, &self.sync_period).await
     }
 
     pub async fn insert_or_replace_entity(&self, entity: &TEntity) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::insert_or_replace_entity(fl_url, entity, &self.sync_period).await
     }
 
     /// Optimistic-concurrency replace. See
-    /// [`super::MyNoSqlDataWriter::replace_entity`]. The `with_retries` here retries the
-    /// underlying HTTP request on transport errors; a 409 `RecordIsChanged` is a real
-    /// conflict and is returned to the caller (drive the read-modify-write loop with
-    /// [`Self::update_entity`]).
+    /// [`super::MyNoSqlDataWriter::replace_entity`]. The `with_retries` here re-sends the
+    /// request (a PUT) when an attempt got no response. A 409 `RecordIsChanged` is returned to
+    /// the caller: it is a conflict with another writer - or, when that attempt had in fact
+    /// landed, with this call's own first write - so re-read before deciding (the
+    /// read-modify-write loop of [`Self::update_entity`] does).
     pub async fn replace_entity(&self, entity: &TEntity) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::replace_entity(fl_url, entity, &self.sync_period).await
     }
 
@@ -73,7 +76,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         .await
     }
 
-    /// [`Self::update_entity`] with an explicit optimistic-concurrency retry limit.
+    /// [`Self::update_entity`] with an explicit optimistic-concurrency attempt limit.
     pub async fn update_entity_with_max_attempts<TFn: FnMut(&mut TEntity)>(
         &self,
         partition_key: &str,
@@ -100,7 +103,8 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
     ///
     /// The two kinds of retry do not multiply: the `with_retries` of this wrapper re-sends a
     /// single HTTP request when the transport fails, while `max_attempts` here counts only
-    /// races actually lost to another writer. FlUrl replays idempotent requests only, so those
+    /// the conflicts the server answers with - races lost to another writer or, rarely, to
+    /// the writer's own re-sent `Replace`. FlUrl replays idempotent requests only, so those
     /// transport retries cover the read (GET) and the replace (PUT) of this loop but not the
     /// insert (POST) - a POST which may already have landed must not be sent twice.
     pub async fn insert_or_update<
@@ -175,7 +179,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         entities: &[TEntity],
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::bulk_insert_or_replace(fl_url, entities, &self.sync_period).await
     }
 
@@ -187,7 +191,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         entities: &[TEntity],
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::bulk_insert_or_update_with_own_timestamp(
             fl_url,
             entities,
@@ -198,26 +202,28 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
 
     /// Insert-or-replace-if-new for a single entity. The `TimeStamp` is the object's
     /// version and is mandatory — a default/unset `Timestamp` makes the server answer
-    /// HTTP 400. See [`super::MyNoSqlDataWriter::insert_or_replace_entity_if_new`].
+    /// HTTP 400 (a `debug_assert!` panic in a debug build). See
+    /// [`super::MyNoSqlDataWriter::insert_or_replace_entity_if_new`].
     pub async fn insert_or_replace_entity_if_new(
         &self,
         entity: &TEntity,
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::insert_or_replace_entity_if_new(fl_url, entity, &self.sync_period).await
     }
 
     /// Bulk insert-or-replace-if-new. Mandatory-`TimeStamp` contract as above; empty slice
-    /// is a no-op. The chunked flow is intentionally not offered on the retries wrapper:
-    /// re-sending a chunk after a partial success would double-append rows into the
-    /// server-side accumulator, so those requests must not be blindly retried.
+    /// is a no-op. The chunked flow is offered on the base writer only: its requests are
+    /// POSTs, which the retries of this wrapper would not re-send anyway (FlUrl replays
+    /// idempotent requests only), and a chunk must never be re-sent blindly - after a partial
+    /// success it would double-append rows into the server-side accumulator.
     pub async fn bulk_insert_or_replace_if_new(
         &self,
         entities: &[TEntity],
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::bulk_insert_or_replace_if_new(fl_url, entities, &self.sync_period).await
     }
 
@@ -227,7 +233,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         rows_to_delete: &BTreeMap<String, Vec<String>>,
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::bulk_delete::<TEntity>(fl_url, rows_to_delete, &self.sync_period).await
     }
 
@@ -236,15 +242,16 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
     /// partial success, the leftovers come back in [`BulkDeleteIfResult::skipped`]. Every
     /// entity must carry a real (non-default) `time_stamp`; an empty slice is a no-op.
     ///
-    /// The `with_retries` here retries the underlying HTTP request on transport errors, which
-    /// is safe: a retry re-sends the same versions, and a row deleted by the first attempt
+    /// The request is a POST and FlUrl replays idempotent requests only, so the `with_retries`
+    /// of this wrapper does not re-send it: a transport failure comes back to the caller.
+    /// Calling again is safe: the same versions go out, and a row deleted by the first attempt
     /// simply comes back as `NotFound` in the second one.
     pub async fn bulk_delete_if(
         &self,
         entities: &[&TEntity],
     ) -> Result<BulkDeleteIfResult, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::bulk_delete_if(fl_url, entities, &self.sync_period).await
     }
 
@@ -255,10 +262,12 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         rows: &[RowToDeleteIf],
     ) -> Result<BulkDeleteIfResult, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::bulk_delete_if_rows::<TEntity>(fl_url, rows, &self.sync_period).await
     }
 
+    /// See [`super::MyNoSqlDataWriter::get_entity`]: `Ok(None)` is exactly "no such row", any
+    /// answer the call has no meaning for is an `Err`.
     pub async fn get_entity(
         &self,
         partition_key: &str,
@@ -266,7 +275,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         update_read_statistics: Option<UpdateReadStatistics>,
     ) -> Result<Option<TEntity>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_entity(
             fl_url,
             partition_key,
@@ -276,13 +285,15 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         .await
     }
 
+    /// See [`super::MyNoSqlDataWriter::get_by_partition_key`]: the `Option` is always `Some`, a
+    /// partition which is not in the table is an empty `Vec`.
     pub async fn get_by_partition_key(
         &self,
         partition_key: &str,
         update_read_statistics: Option<UpdateReadStatistics>,
     ) -> Result<Option<Vec<TEntity>>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_by_partition_key(
             fl_url,
             partition_key,
@@ -302,7 +313,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
             .fl_url_factory
             .get_fl_url_without_auto_create_table()
             .await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_rows_count(fl_url, TEntity::TABLE_NAME, partition_key).await
     }
 
@@ -318,7 +329,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         update_read_statistics: Option<UpdateReadStatistics>,
     ) -> Result<Option<Vec<TResult>>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_enum_case_models_by_partition_key(
             fl_url,
             update_read_statistics.as_ref(),
@@ -338,16 +349,17 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         update_read_statistics: Option<UpdateReadStatistics>,
     ) -> Result<Option<TResult>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_enum_case_model(fl_url, update_read_statistics.as_ref()).await
     }
 
+    /// See [`super::MyNoSqlDataWriter::get_by_row_key`]: the `Option` is always `Some`.
     pub async fn get_by_row_key(
         &self,
         row_key: &str,
     ) -> Result<Option<Vec<TEntity>>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_by_row_key(fl_url, row_key).await
     }
 
@@ -362,8 +374,8 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         &self,
     ) -> Result<Option<TResult>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
-        super::execution::delete_enum_case(fl_url).await
+        let fl_url = fl_url.with_retries(self.retries);
+        super::execution::delete_enum_case(fl_url, &self.sync_period).await
     }
 
     pub async fn delete_enum_case_with_row_key<
@@ -378,24 +390,28 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         row_key: &str,
     ) -> Result<Option<TResult>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
-        super::execution::delete_enum_case_with_row_key(fl_url, row_key).await
+        let fl_url = fl_url.with_retries(self.retries);
+        super::execution::delete_enum_case_with_row_key(fl_url, row_key, &self.sync_period).await
     }
 
+    /// See [`super::MyNoSqlDataWriter::delete_row`]. The request is a DELETE, so the retries of
+    /// this wrapper apply to it; a row deleted by an attempt whose answer was lost comes back
+    /// as `Ok(None)` from the next one.
     pub async fn delete_row(
         &self,
         partition_key: &str,
         row_key: &str,
     ) -> Result<Option<TEntity>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
-        super::execution::delete_row(fl_url, partition_key, row_key).await
+        let fl_url = fl_url.with_retries(self.retries);
+        super::execution::delete_row(fl_url, partition_key, row_key, &self.sync_period).await
     }
 
     /// Optimistic-concurrency delete of the row this entity stands for. See
-    /// [`super::MyNoSqlDataWriter::delete_entity_if`]. The `with_retries` here retries the
-    /// underlying HTTP request on transport errors; a 409 `RecordIsChanged` is a real
-    /// conflict and is returned to the caller.
+    /// [`super::MyNoSqlDataWriter::delete_entity_if`]. The `with_retries` here re-sends the
+    /// request (a DELETE) when an attempt got no response; if that attempt had in fact deleted
+    /// the row, the re-sent one answers 404 and this returns `Ok(None)`. A 409
+    /// `RecordIsChanged` is a real conflict and is returned to the caller.
     pub async fn delete_entity_if(
         &self,
         entity: &TEntity,
@@ -417,7 +433,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         time_stamp: Timestamp,
     ) -> Result<Option<TEntity>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::delete_row_if(
             fl_url,
             partition_key,
@@ -428,15 +444,37 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         .await
     }
 
+    /// Deletes whole partitions - see [`super::MyNoSqlDataWriter::delete_partitions`]. The
+    /// request is a DELETE, so the retries of this wrapper apply to it - to each request of a
+    /// list which takes several; a partition deleted by an attempt whose answer was lost is
+    /// simply skipped by the next one.
     pub async fn delete_partitions(&self, partition_keys: &[&str]) -> Result<(), DataWriterError> {
-        let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
-        super::execution::delete_partitions(fl_url, TEntity::TABLE_NAME, partition_keys).await
+        let requests = super::execution::split_partition_keys(partition_keys);
+
+        if requests.is_empty() {
+            self.fl_url_factory.get_fl_url().await?;
+            return Ok(());
+        }
+
+        for partition_keys in requests {
+            let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
+            let fl_url = fl_url.with_retries(self.retries);
+            super::execution::delete_partitions(
+                fl_url,
+                TEntity::TABLE_NAME,
+                partition_keys,
+                &self.sync_period,
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 
+    /// See [`super::MyNoSqlDataWriter::get_all`]: the `Option` is always `Some`.
     pub async fn get_all(&self) -> Result<Option<Vec<TEntity>>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_all(fl_url).await
     }
 
@@ -449,7 +487,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         entities: &[TEntity],
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::clean_table_and_bulk_insert(fl_url, entities, &self.sync_period).await
     }
 
@@ -462,7 +500,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         entities: &[TEntity],
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::clean_partition_and_bulk_insert(
             fl_url,
             partition_key,
@@ -481,7 +519,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         entities: &[TEntity],
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::clean_table_and_bulk_insert_with_own_timestamp(
             fl_url,
             entities,
@@ -494,15 +532,16 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
     /// See [`super::MyNoSqlDataWriter::clean_partition_and_bulk_insert_with_own_timestamp`].
     /// Same atomic snapshot swap — the partition is never observed empty.
     /// Every entity must carry a real (non-default) `time_stamp`. (The chunked clean flow is
-    /// only on the base writer — re-sending a chunk after a partial success would double-append
-    /// into the server-side accumulator.)
+    /// only on the base writer: its requests are POSTs, which this wrapper's retries would not
+    /// re-send anyway, and a chunk re-sent after a partial success would double-append into
+    /// the server-side accumulator.)
     pub async fn clean_partition_and_bulk_insert_with_own_timestamp(
         &self,
         partition_key: &str,
         entities: &[TEntity],
     ) -> Result<(), DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
-        let fl_url = fl_url.with_retries(self.max_attempts);
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::clean_partition_and_bulk_insert_with_own_timestamp(
             fl_url,
             partition_key,
@@ -512,12 +551,14 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         .await
     }
 
+    /// See [`super::MyNoSqlDataWriter::get_partition_keys`].
     pub async fn get_partition_keys(
         &self,
         skip: Option<i32>,
         limit: Option<i32>,
     ) -> Result<Vec<String>, DataWriterError> {
         let (fl_url, _) = self.fl_url_factory.get_fl_url().await?;
+        let fl_url = fl_url.with_retries(self.retries);
         super::execution::get_partition_keys(fl_url, TEntity::TABLE_NAME, skip, limit).await
     }
 }

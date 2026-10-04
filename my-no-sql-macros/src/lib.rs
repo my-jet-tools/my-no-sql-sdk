@@ -27,7 +27,7 @@ struct EnumOfMyNoSqlEntityParameters<'s> {
     #[default]
     pub table_name: &'s str,
 
-    // For each case fn unwrap_case_xx(&self)->&Model will be generated
+    // For each case `fn unwrap_<case name in snake_case>(&self) -> &Model` will be generated
     #[has_attribute]
     pub generate_unwraps: bool,
 }
@@ -51,12 +51,4 @@ pub fn enum_model(attr: TokenStream, input: TokenStream) -> TokenStream {
         Ok(result) => result.into(),
         Err(err) => err.into_compile_error().into(),
     }
-}
-
-#[proc_macro]
-pub fn time_stamp_init(_input: TokenStream) -> TokenStream {
-    quote::quote! {
-        "".to_string()
-    }
-    .into()
 }

@@ -35,10 +35,13 @@ impl FlUrlExt for FlUrl {
         self.append_query_param("partitionKey", Some(partition_key))
     }
 
+    /// The list of `DELETE /api/Rows/DeletePartitions`: the parameter is `partitionKeys` and it
+    /// is repeated once per key - the server takes every pair of that name as one element. A
+    /// single `partitionKey` (the name of the one-partition parameter) is not read at all there.
     fn with_partition_keys_as_query_param(self, partition_keys: &[&str]) -> FlUrl {
         let mut s = self;
         for partition_key in partition_keys {
-            s = s.append_query_param("partitionKey", Some(*partition_key));
+            s = s.append_query_param("partitionKeys", Some(*partition_key));
         }
         s
     }

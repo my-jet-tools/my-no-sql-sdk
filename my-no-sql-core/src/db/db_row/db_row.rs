@@ -17,7 +17,7 @@ use super::RowKeyParameter;
 /// It comes in two shapes:
 /// - [`DbRow::Plain`] — the raw JSON bytes are kept as-is (the historical layout);
 ///   keys/timestamp/expires are byte offsets into `raw` and reads are zero-copy.
-/// - [`DbRow::Compressed`] — the JSON body is kept DEFLATE-compressed in memory
+/// - `DbRow::Compressed` — the JSON body is kept DEFLATE-compressed in memory
 ///   (master-node only). Keys and metadata are kept uncompressed so indexing/GC
 ///   never decompress; only emitting the row (`write_json`/`content_bytes`)
 ///   decompresses.
@@ -110,10 +110,14 @@ impl DbRowPlain {
 
         #[cfg(feature = "master-node")]
         let time_stamp = db_json_entity.time_stamp.unwrap();
+        // A stored `TimeStamp` which is not a json string - `null`, a number - is as unreadable
+        // as a string which is not a date: it has no quotes to read the text between.
         #[cfg(feature = "master-node")]
-        let time_stamp_value =
-            my_no_sql_abstractions::parse_time_stamp(time_stamp.value.get_str_value(&raw))
-                .unwrap_or_else(DateTimeAsMicroseconds::now);
+        let time_stamp_value = time_stamp
+            .value
+            .try_get_str_value(&raw)
+            .and_then(my_no_sql_abstractions::parse_time_stamp)
+            .unwrap_or_else(DateTimeAsMicroseconds::now);
 
         Self {
             raw,
@@ -152,9 +156,13 @@ impl DbRowPlain {
         }
     }
 
+    /// The `TimeStamp` as the row spells it. Empty when the stored value is not a json string -
+    /// a row restored with `"TimeStamp":null` has no text between the quotes to give out.
     #[cfg(feature = "master-node")]
     pub fn get_time_stamp(&self) -> &str {
-        self.time_stamp.get_str_value(&self.raw)
+        self.time_stamp
+            .try_get_str_value(&self.raw)
+            .unwrap_or_default()
     }
 
     #[cfg(feature = "master-node")]
@@ -695,5 +703,87 @@ mod tests {
 
         let back_to_plain = DbRow::decompress_arc(compressed);
         assert_eq!(back_to_plain.get_expires(), plain.get_expires());
+    }
+
+    fn restore_row(json: &str) -> DbRow {
+        DbJsonEntity::restore_into_db_row(json.as_bytes().to_vec()).unwrap()
+    }
+
+    /// The `TimeStamp` of a row as its json spells it.
+    fn time_stamp_as_str(db_row: &DbRow) -> &str {
+        match db_row {
+            DbRow::Plain(row) => row.get_time_stamp(),
+            DbRow::Compressed(_) => panic!("A restored row is a plain one"),
+        }
+    }
+
+    /// A row comes back from the disk with whatever `TimeStamp` it was stored with. One which
+    /// is not a json string is as unreadable as a string which is not a date - it used to be
+    /// read with its first and last character cut off, as if they were the quotes: `123` was
+    /// two seconds past the epoch, `1202005060708091` was `2020-05-06T07:08:09`, and `5`
+    /// panicked.
+    #[test]
+    fn a_restored_time_stamp_which_is_not_a_string_is_not_read_as_one() {
+        use rust_extensions::date_time::DateTimeAsMicroseconds;
+
+        for value in [
+            "null",
+            "5",
+            "123",
+            "1588748889",
+            "1202005060708091",
+            "true",
+            "{}",
+        ] {
+            let json = format!(
+                r#"{{"PartitionKey":"Pk","RowKey":"Rk","TimeStamp":{}}}"#,
+                value
+            );
+
+            let before = DateTimeAsMicroseconds::now();
+            let db_row = restore_row(json.as_str());
+            let after = DateTimeAsMicroseconds::now();
+
+            // What a row with an unreadable `TimeStamp` gets - the moment it was restored at
+            let time_stamp = db_row.get_time_stamp_as_date_time().unix_microseconds;
+
+            assert!(
+                before.unix_microseconds <= time_stamp && time_stamp <= after.unix_microseconds,
+                "source: {}",
+                value
+            );
+
+            // ...and there is no text between the quotes to give out
+            assert_eq!("", time_stamp_as_str(&db_row), "source: {}", value);
+        }
+    }
+
+    #[test]
+    fn a_restored_time_stamp_which_is_a_string_is_read_as_it_is_spelled() {
+        use rust_extensions::date_time::DateTimeAsMicroseconds;
+
+        let db_row = restore_row(
+            r#"{"PartitionKey":"Pk","RowKey":"Rk","TimeStamp":"2020-05-06T07:08:09.123456"}"#,
+        );
+
+        assert_eq!("2020-05-06T07:08:09.123456", time_stamp_as_str(&db_row));
+
+        assert_eq!(
+            DateTimeAsMicroseconds::from_str("2020-05-06T07:08:09.123456")
+                .unwrap()
+                .unix_microseconds,
+            db_row.get_time_stamp_as_date_time().unix_microseconds
+        );
+    }
+
+    /// A stored `"Expires":null` is a row which does not expire - `null` is not a moment.
+    #[test]
+    fn a_restored_expires_which_is_null_means_no_expiration() {
+        let json = r#"{"PartitionKey":"Pk","RowKey":"Rk","TimeStamp":"2020-05-06T07:08:09","Expires":null}"#;
+
+        assert!(restore_row(json).get_expires().is_none());
+
+        // ...and so is the one a client has just written
+        assert!(create_plain_row(json).get_expires().is_none());
     }
 }
