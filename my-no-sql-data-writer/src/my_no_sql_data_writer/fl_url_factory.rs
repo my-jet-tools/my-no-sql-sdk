@@ -1,9 +1,11 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use flurl::FlUrl;
 
 use my_no_sql_abstractions::{parse_connection_string, ConnectionString};
-use rust_extensions::UnsafeValue;
 
 use super::{CreateTableParams, DataWriterError, MyNoSqlWriterSettings};
 
@@ -21,7 +23,7 @@ pub struct FlUrlFactory {
     pub ssh_security_credentials_resolver:
         Option<Arc<dyn flurl::my_ssh::ssh_settings::SshSecurityCredentialsResolver + Send + Sync>>,
 
-    create_table_is_called: Arc<UnsafeValue<bool>>,
+    create_table_is_called: Arc<AtomicBool>,
     table_name: &'static str,
     mode: flurl::FlUrlMode,
     body_size_limit: usize,
@@ -36,7 +38,7 @@ impl FlUrlFactory {
         Self {
             auto_create_table_params,
 
-            create_table_is_called: UnsafeValue::new(false).into(),
+            create_table_is_called: Arc::new(AtomicBool::new(false)),
             settings,
             table_name,
             // HTTP/2 multiplexes all our requests over a single connection per
@@ -113,13 +115,13 @@ impl FlUrlFactory {
     pub async fn get_fl_url(&self) -> Result<(FlUrl, String), DataWriterError> {
         let connection_string = parse_connection_string(self.settings.get_url().await.as_str())?;
 
-        if !self.create_table_is_called.get_value() {
+        if !self.create_table_is_called.load(Ordering::Relaxed) {
             if let Some(crate_table_params) = &self.auto_create_table_params {
                 self.create_table_if_not_exists(&connection_string, crate_table_params)
                     .await?;
             }
 
-            self.create_table_is_called.set_value(true);
+            self.create_table_is_called.store(true, Ordering::Relaxed);
         }
 
         let result = self.create_fl_url(&connection_string)?;
@@ -153,7 +155,7 @@ impl FlUrlFactory {
     /// that request to a table which is already there, so the auto-create parameters would
     /// replace the ones the table was just created with.
     pub(crate) fn table_is_created(&self) {
-        self.create_table_is_called.set_value(true);
+        self.create_table_is_called.store(true, Ordering::Relaxed);
     }
 
     pub async fn create_table_if_not_exists(
