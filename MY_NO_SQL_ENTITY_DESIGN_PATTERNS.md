@@ -512,7 +512,8 @@ pub async fn reload_my_entities(app: Arc<AppContext>) {
 Assign the callback between `MyNoSqlTcpConnection::get_reader()` and `MyNoSqlTcpConnection::start()`.
 The first snapshot is handed to the callbacks which are assigned when it arrives; a callback assigned
 after that gets only the changes which come later, and a cache filled by it stays empty until the
-table changes.
+table changes or the connection is made again — every reconnect re-sends the snapshot, and the
+callback then gets every row of the table.
 
 ```rust
 use my_no_sql_sdk::reader::MyNoSqlDataReader;

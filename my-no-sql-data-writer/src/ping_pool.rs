@@ -205,10 +205,10 @@ async fn ping_round(snapshot: Vec<PingSnapshotItem>) {
         let url_to_ping = group_by_endpoint(&itm).await;
 
         for (_, (settings, tables, use_h1)) in url_to_ping {
-            // In a task of its own. The HTTP client panics on some urls - an `https://` one
-            // in a build without a TLS feature - and this loop is a single task which nothing
-            // starts again: a panic of one ping would end the ping of every writer of the
-            // process.
+            // In a task of its own: this loop is a single task which nothing starts again, so a
+            // panic of one ping would end the ping of every writer of the process. (An `https://`
+            // url in a build without a TLS feature no longer panics - the HTTP client returns
+            // `UnsupportedScheme`, which is an error of that ping.)
             let ping = tokio::spawn(ping_endpoint(
                 itm.name,
                 itm.version,
@@ -374,11 +374,13 @@ mod tests {
         }
     }
 
-    /// A ping which panics - the HTTP client does on an `https://` url when it is built without
-    /// a TLS feature - is the end of that ping, not of the round: the loop is a single task
-    /// which nothing starts again, so the writers behind it would never be pinged again.
+    /// A ping which fails - with an error or with a panic - is the end of that ping, not of the
+    /// round: the loop is a single task which nothing starts again, so the writers behind it
+    /// would never be pinged again. The failing url is `https://` - without a TLS feature the
+    /// HTTP client returns `UnsupportedScheme` (it used to panic), with one the connection is
+    /// refused.
     #[tokio::test]
-    async fn a_ping_which_panics_does_not_end_the_round() {
+    async fn a_ping_which_fails_does_not_end_the_round() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         // a server which writes down the request line of what it gets and answers 204
@@ -434,16 +436,16 @@ mod tests {
             });
         }
 
-        // Nothing listens there. Without a TLS feature the request panics before it gets
-        // that far; with one it is refused, which is an error of the ping
-        let panics = settings_of("https://127.0.0.1:1");
+        // Nothing listens there. Without a TLS feature the request fails with
+        // `UnsupportedScheme` before it gets that far; with one it is refused
+        let failing = settings_of("https://127.0.0.1:1");
         let healthy = settings_of(url);
 
         let snapshot = vec![
             PingSnapshotItem {
                 name: "first-app",
                 version: "0.0.0",
-                table_settings: vec![table_item(&panics, "table-a", true)],
+                table_settings: vec![table_item(&failing, "table-a", true)],
             },
             PingSnapshotItem {
                 name: "second-app",

@@ -22,7 +22,7 @@ debug_db_row = ["my-no-sql-core/debug_db_row"]
 with-ssh = ["my-no-sql-data-writer?/with-ssh"]
 
 # TLS for `https://` MyNoSql urls — see my-no-sql-data-writer. Only meaningful together
-# with `data-writer`; pick one. Without either, an https url panics at request time.
+# with `data-writer`; pick one. Without either, a request to an https url fails with `UnsupportedScheme`.
 with-rust-tls = ["my-no-sql-data-writer?/with-rust-tls"]
 with-ring-tls = ["my-no-sql-data-writer?/with-ring-tls"]
 

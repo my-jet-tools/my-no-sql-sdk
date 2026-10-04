@@ -11,7 +11,7 @@ default = []
 with-ssh = ["flurl/with-ssh"]
 
 # TLS for `https://` MyNoSql urls. FlUrl compiles its TLS paths only when one of these
-# is on; without either, an https url panics at request time. Pick exactly one —
+# is on; without either, a request to an https url fails with `UnsupportedScheme`. Pick exactly one —
 # enabling both is not an error (my-tls resolves it in favour of ring), which is what
 # `--all-features` does.
 #

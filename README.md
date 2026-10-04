@@ -67,7 +67,7 @@ async-trait = "*" # the settings traits (MyNoSqlWriterSettings, MyNoSqlTcpConnec
 
 `my_no_sql_sdk::core` and `my_no_sql_sdk::abstractions` are always available.
 
-Pick one of `with-ring-tls` / `with-rust-tls` when the writer url is `https://` — without either, such a url panics at request time: in the call, and in the background ping of that writer (the other writers of the process are pinged as before).
+Pick one of `with-ring-tls` / `with-rust-tls` when the writer url is `https://` — without either, every request to such a url fails with `FlUrlError::UnsupportedScheme`: the call returns `DataWriterError::FlUrlError(FlUrlError::UnsupportedScheme(..))`, and the background ping of that writer prints it and goes on.
 
 ---
 
@@ -696,6 +696,7 @@ via `flate2`); that code is not compiled into client readers.
 cargo check --workspace --all-targets
 cargo test --workspace
 cargo test --workspace --features master-node              # also runs the master-node-only tests
+cargo test -p my-no-sql-tcp-reader --features mocks        # the mock-reader tests run only with `mocks`
 cargo check -p my-no-sql-data-writer --features with-ssh   # unix-only feature
 ```
 
@@ -751,8 +752,9 @@ Writer:
   `InvalidConnectionString` from the call. It used to panic in the task of the caller, and in the ping loop —
   which ended the ping of every writer of the process (a blank string did not panic: it was an error of the HTTP
   client).
-- A ping which panics — the HTTP client does on an `https://` url in a build without a TLS feature — no longer
-  ends the ping loop: the other writers of the process are pinged as before.
+- A ping which panics no longer ends the ping loop: each ping runs in a task of its own, and the other writers of
+  the process are pinged as before. (An `https://` url in a build without a TLS feature does not panic any more:
+  with fl-url `0.7.0` the request fails with `FlUrlError::UnsupportedScheme`.)
 
 Reader:
 
@@ -794,6 +796,10 @@ Entities:
   whatever the order of declaration; `deserialize_entity` returns `Err` for a body which is not an entity (it used
   to panic), and the error of a case which does not parse names the table. A case without a model is a compile
   error which says so (`Enum case must have a model`) instead of `custom attribute panicked`.
+  Check your enums when you update: in one which declares a whole-partition case before a row case of the same
+  partition, the rows of the row case used to be read as the whole-partition case. They are read as their own
+  case now, so `get_enum_case_models_by_partition_key` of the whole-partition case panics (`Expected case …`) on
+  them — on the reader and on the writer.
 
 Server side (`my-no-sql-core`, once the server or a node is built on it):
 
