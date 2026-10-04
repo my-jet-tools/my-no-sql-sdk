@@ -582,8 +582,8 @@ writers of that table the application has built.
 
 ### Size of an answer
 
-The writer reads answers of up to **100 MB** (`DEFAULT_BODY_SIZE_LIMIT`) — FlUrl alone stops at 10 MB, which a
-table, or a partition, easily outgrows. A bigger answer fails the call with
+The writer reads answers of up to **100 MB** (`DEFAULT_BODY_SIZE_LIMIT`, the same as FlUrl's own default). A
+bigger answer fails the call with
 `DataWriterError::FlUrlError(FlUrlError::ResponseBodyTooLarge { limit })`. The limit is set on the builder or on
 the writer, and the `with_retries` wrappers made after that read with it; `usize::MAX` lifts it:
 

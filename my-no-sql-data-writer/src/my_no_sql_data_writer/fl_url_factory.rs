@@ -10,8 +10,8 @@ use my_no_sql_abstractions::{parse_connection_string, ConnectionString};
 use super::{CreateTableParams, DataWriterError, MyNoSqlWriterSettings};
 
 /// The largest answer a writer reads, in bytes, unless it is given another limit by
-/// `set_body_size_limit`: 100 MB. FlUrl reads no more than 10 MB of an answer by default, and a
-/// table - a partition even - is easily bigger than that.
+/// `set_body_size_limit`: 100 MB, the same as the default of FlUrl. The writer hands its limit to
+/// every request it makes, so the limit set on the writer is the one which counts.
 pub const DEFAULT_BODY_SIZE_LIMIT: usize = 100 * 1024 * 1024;
 
 #[derive(Clone)]
