@@ -494,154 +494,141 @@ macro_rules! for_each_call {
         let writer = &$writer;
         let rows = [row()];
 
-        $expect!(writer.insert_entity(&rows[0]).await, "insert_entity");
+        $expect!(Box::pin(writer.insert_entity(&rows[0])).await, "insert_entity");
         $expect!(
-            writer.insert_or_replace_entity(&rows[0]).await,
+            Box::pin(writer.insert_or_replace_entity(&rows[0])).await,
             "insert_or_replace_entity"
         );
-        $expect!(writer.replace_entity(&rows[0]).await, "replace_entity");
+        $expect!(Box::pin(writer.replace_entity(&rows[0])).await, "replace_entity");
         $expect!(
-            writer.bulk_insert_or_replace(&rows).await,
+            Box::pin(writer.bulk_insert_or_replace(&rows)).await,
             "bulk_insert_or_replace"
         );
         $expect!(
-            writer.bulk_insert_or_update_with_own_timestamp(&rows).await,
+            Box::pin(writer.bulk_insert_or_update_with_own_timestamp(&rows)).await,
             "bulk_insert_or_update_with_own_timestamp"
         );
-        $expect!(writer.bulk_delete(&rows_to_delete()).await, "bulk_delete");
-        $expect!(writer.bulk_delete_if(&[&rows[0]]).await, "bulk_delete_if");
+        $expect!(Box::pin(writer.bulk_delete(&rows_to_delete())).await, "bulk_delete");
+        $expect!(Box::pin(writer.bulk_delete_if(&[&rows[0]])).await, "bulk_delete_if");
         $expect!(
-            writer
-                .bulk_delete_if_rows(&[RowToDeleteIf::from_entity(&rows[0])])
-                .await,
+            Box::pin(writer.bulk_delete_if_rows(&[RowToDeleteIf::from_entity(&rows[0])])).await,
             "bulk_delete_if_rows"
         );
         $expect!(
-            writer.insert_or_replace_entity_if_new(&rows[0]).await,
+            Box::pin(writer.insert_or_replace_entity_if_new(&rows[0])).await,
             "insert_or_replace_entity_if_new"
         );
         $expect!(
-            writer.bulk_insert_or_replace_if_new(&rows).await,
+            Box::pin(writer.bulk_insert_or_replace_if_new(&rows)).await,
             "bulk_insert_or_replace_if_new"
         );
         $expect!(
-            writer.insert_or_replace_if_new_by_chunks_start(&rows).await,
+            Box::pin(writer.insert_or_replace_if_new_by_chunks_start(&rows)).await,
             "insert_or_replace_if_new_by_chunks_start"
         );
         $expect!(
-            writer
-                .insert_or_replace_if_new_by_chunks_append("process", &rows)
-                .await,
+            Box::pin(writer.insert_or_replace_if_new_by_chunks_append("process", &rows)).await,
             "insert_or_replace_if_new_by_chunks_append"
         );
         $expect!(
-            writer
-                .insert_or_replace_if_new_by_chunks_commit("process")
-                .await,
+            Box::pin(writer.insert_or_replace_if_new_by_chunks_commit("process")).await,
             "insert_or_replace_if_new_by_chunks_commit"
         );
         $expect!(
-            writer
-                .insert_or_replace_if_new_by_chunks_cancel("process")
-                .await,
+            Box::pin(writer.insert_or_replace_if_new_by_chunks_cancel("process")).await,
             "insert_or_replace_if_new_by_chunks_cancel"
         );
         $expect!(
-            writer
-                .clean_and_bulk_insert_by_chunks_with_own_timestamp_start(None, &rows)
-                .await,
+            Box::pin(
+                writer.clean_and_bulk_insert_by_chunks_with_own_timestamp_start(None, &rows),
+            )
+            .await,
             "clean_and_bulk_insert_by_chunks_with_own_timestamp_start"
         );
         $expect!(
-            writer
-                .clean_and_bulk_insert_by_chunks_with_own_timestamp_append("process", &rows)
-                .await,
+            Box::pin(
+                writer.clean_and_bulk_insert_by_chunks_with_own_timestamp_append("process", &rows),
+            )
+            .await,
             "clean_and_bulk_insert_by_chunks_with_own_timestamp_append"
         );
         $expect!(
-            writer
-                .clean_and_bulk_insert_by_chunks_with_own_timestamp_commit("process")
-                .await,
+            Box::pin(
+                writer.clean_and_bulk_insert_by_chunks_with_own_timestamp_commit("process"),
+            )
+            .await,
             "clean_and_bulk_insert_by_chunks_with_own_timestamp_commit"
         );
         $expect!(
-            writer
-                .clean_and_bulk_insert_by_chunks_with_own_timestamp_cancel("process")
-                .await,
+            Box::pin(
+                writer.clean_and_bulk_insert_by_chunks_with_own_timestamp_cancel("process"),
+            )
+            .await,
             "clean_and_bulk_insert_by_chunks_with_own_timestamp_cancel"
         );
 
-        $expect!(writer.get_entity("pk", "rk", None).await, "get_entity");
+        $expect!(Box::pin(writer.get_entity("pk", "rk", None)).await, "get_entity");
         $expect!(
-            writer.get_by_partition_key("pk", None).await,
+            Box::pin(writer.get_by_partition_key("pk", None)).await,
             "get_by_partition_key"
         );
-        $expect!(writer.get_by_row_key("rk").await, "get_by_row_key");
-        $expect!(writer.get_all().await, "get_all");
+        $expect!(Box::pin(writer.get_by_row_key("rk")).await, "get_by_row_key");
+        $expect!(Box::pin(writer.get_all()).await, "get_all");
         $expect!(
-            writer.get_partition_keys(None, None).await,
+            Box::pin(writer.get_partition_keys(None, None)).await,
             "get_partition_keys"
         );
-        $expect!(writer.delete_row("pk", "rk").await, "delete_row");
+        $expect!(Box::pin(writer.delete_row("pk", "rk")).await, "delete_row");
         $expect!(
-            writer.delete_row_if("pk", "rk", time_stamp()).await,
+            Box::pin(writer.delete_row_if("pk", "rk", time_stamp())).await,
             "delete_row_if"
         );
-        $expect!(writer.delete_partitions(&["pk"]).await, "delete_partitions");
+        $expect!(Box::pin(writer.delete_partitions(&["pk"])).await, "delete_partitions");
         $expect!(
-            writer.clean_table_and_bulk_insert(&rows).await,
+            Box::pin(writer.clean_table_and_bulk_insert(&rows)).await,
             "clean_table_and_bulk_insert"
         );
         $expect!(
-            writer.clean_partition_and_bulk_insert("pk", &rows).await,
+            Box::pin(writer.clean_partition_and_bulk_insert("pk", &rows)).await,
             "clean_partition_and_bulk_insert"
         );
         $expect!(
-            writer
-                .clean_table_and_bulk_insert_with_own_timestamp(&rows)
-                .await,
+            Box::pin(writer.clean_table_and_bulk_insert_with_own_timestamp(&rows)).await,
             "clean_table_and_bulk_insert_with_own_timestamp"
         );
         $expect!(
-            writer
-                .clean_partition_and_bulk_insert_with_own_timestamp("pk", &rows)
-                .await,
+            Box::pin(writer.clean_partition_and_bulk_insert_with_own_timestamp("pk", &rows)).await,
             "clean_partition_and_bulk_insert_with_own_timestamp"
         );
 
         $expect!(
-            writer.get_enum_case_model::<TestCase>(None).await,
+            Box::pin(writer.get_enum_case_model::<TestCase>(None)).await,
             "get_entity"
         );
         $expect!(
-            writer
-                .get_enum_case_models_by_partition_key::<TestCase>(None)
-                .await,
+            Box::pin(writer.get_enum_case_models_by_partition_key::<TestCase>(None)).await,
             "get_by_partition_key"
         );
-        $expect!(writer.delete_enum_case::<TestCase>().await, "delete_row");
+        $expect!(Box::pin(writer.delete_enum_case::<TestCase>()).await, "delete_row");
         $expect!(
-            writer.delete_enum_case_with_row_key::<TestCase>("rk").await,
+            Box::pin(writer.delete_enum_case_with_row_key::<TestCase>("rk")).await,
             "delete_row"
         );
-        $expect!(writer.delete_entity_if(&rows[0]).await, "delete_row_if");
-        $expect!(writer.update_entity("pk", "rk", |_| {}).await, "get_entity");
+        $expect!(Box::pin(writer.delete_entity_if(&rows[0])).await, "delete_row_if");
+        $expect!(Box::pin(writer.update_entity("pk", "rk", |_| {})).await, "get_entity");
         $expect!(
-            writer
-                .insert_or_update("pk", "rk", row, |_: &mut TestEntity| true)
-                .await,
+            Box::pin(writer.insert_or_update("pk", "rk", row, |_: &mut TestEntity| true)).await,
             "get_entity"
         );
         $expect!(
-            writer
-                .bulk_insert_or_replace_if_new_by_chunks(&rows, 10)
-                .await,
+            Box::pin(writer.bulk_insert_or_replace_if_new_by_chunks(&rows, 10)).await,
             "insert_or_replace_if_new_by_chunks_start"
         );
         $expect!(
-            writer
-                .clean_and_bulk_insert_by_chunks_with_own_timestamp(None, &rows, 10)
-                .await,
+            Box::pin(
+                writer.clean_and_bulk_insert_by_chunks_with_own_timestamp(None, &rows, 10),
+            )
+            .await,
             "clean_and_bulk_insert_by_chunks_with_own_timestamp_start"
         );
     }};
@@ -654,9 +641,9 @@ macro_rules! for_each_create_call {
     ($writer:expr, $expect:ident) => {{
         let writer = &$writer;
 
-        $expect!(writer.create_table(table_params()).await, "create_table");
+        $expect!(Box::pin(writer.create_table(table_params())).await, "create_table");
         $expect!(
-            writer.create_table_if_not_exists(&table_params()).await,
+            Box::pin(writer.create_table_if_not_exists(&table_params())).await,
             "create_table_if_not_exists"
         );
     }};
