@@ -7,6 +7,11 @@ use rust_extensions::UnsafeValue;
 
 use super::{CreateTableParams, DataWriterError, MyNoSqlWriterSettings};
 
+/// The largest answer a writer reads, in bytes, unless it is given another limit by
+/// `set_body_size_limit`: 100 MB. FlUrl reads no more than 10 MB of an answer by default, and a
+/// table - a partition even - is easily bigger than that.
+pub const DEFAULT_BODY_SIZE_LIMIT: usize = 100 * 1024 * 1024;
+
 #[derive(Clone)]
 pub struct FlUrlFactory {
     settings: Arc<dyn MyNoSqlWriterSettings + Send + Sync + 'static>,
@@ -19,6 +24,7 @@ pub struct FlUrlFactory {
     create_table_is_called: Arc<UnsafeValue<bool>>,
     table_name: &'static str,
     mode: flurl::FlUrlMode,
+    body_size_limit: usize,
 }
 
 impl FlUrlFactory {
@@ -36,6 +42,7 @@ impl FlUrlFactory {
             // HTTP/2 multiplexes all our requests over a single connection per
             // endpoint. Servers which do not speak h2 can be handled with use_h1().
             mode: flurl::FlUrlMode::H2,
+            body_size_limit: DEFAULT_BODY_SIZE_LIMIT,
 
             #[cfg(all(unix, feature = "with-ssh"))]
             ssh_security_credentials_resolver: None,
@@ -45,6 +52,11 @@ impl FlUrlFactory {
     /// Falls back to HTTP/1.1 - for MyNoSqlServer instances which do not support HTTP/2.
     pub fn use_h1(&mut self) {
         self.mode = flurl::FlUrlMode::Http1Hyper;
+    }
+
+    /// The largest answer the writer reads, in bytes - see [`DEFAULT_BODY_SIZE_LIMIT`].
+    pub fn set_body_size_limit(&mut self, value: usize) {
+        self.body_size_limit = value;
     }
 
     pub fn get_settings(&self) -> &Arc<dyn MyNoSqlWriterSettings + Send + Sync + 'static> {
@@ -80,6 +92,7 @@ impl FlUrlFactory {
         // alike) to a single writer.
         let mut fl_url = fl_url
             .update_mode(self.mode)
+            .set_max_response_body_size(self.body_size_limit)
             .with_header("session", super::get_writer_session_id());
 
         // Nothing is sent when the connection works with the default namespace - which is what

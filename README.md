@@ -197,7 +197,7 @@ let writer = MyNoSqlDataWriter::<InstrumentEntity>::create_with_builder(settings
 ```
 
 Builder options: `set_sync_period`, `persist_table`, `set_max_partitions_amount`,
-`set_max_row_per_partitions_amount`, `do_not_auto_create_table`, `use_h1`.
+`set_max_row_per_partitions_amount`, `do_not_auto_create_table`, `use_h1`, `set_body_size_limit`.
 By default the table is auto-created on the first request — `create_table` / `create_table_if_not_exists` excepted:
 they send only their own request, the table gets the parameters passed to them, and once one of them succeeds that
 writer (its `with_retries` wrappers included) does not auto-create the table any more (`get_rows_count` never creates
@@ -579,6 +579,19 @@ let writer = MyNoSqlDataWriter::<InstrumentEntity>::create_with_builder(settings
 
 The 30-second background ping loop follows the same choice. It names a table once per endpoint, however many
 writers of that table the application has built.
+
+### Size of an answer
+
+The writer reads answers of up to **100 MB** (`DEFAULT_BODY_SIZE_LIMIT`) — FlUrl alone stops at 10 MB, which a
+table, or a partition, easily outgrows. A bigger answer fails the call with
+`DataWriterError::FlUrlError(FlUrlError::ResponseBodyTooLarge { limit })`. The limit is set on the builder or on
+the writer, and the `with_retries` wrappers made after that read with it; `usize::MAX` lifts it:
+
+```rust
+let writer = MyNoSqlDataWriter::<InstrumentEntity>::create_with_builder(settings)
+    .set_body_size_limit(500 * 1024 * 1024)
+    .build();
+```
 
 ---
 

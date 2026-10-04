@@ -1328,6 +1328,79 @@ async fn the_answers_of_the_api_are_read_the_way_they_were() {
         .unwrap();
 }
 
+/// FlUrl reads no more than 10 MB of an answer unless it is told otherwise, and a table - a
+/// partition even - is easily bigger than that. The writer reads answers of up to 100 MB.
+#[tokio::test]
+async fn an_answer_over_the_default_limit_of_fl_url_is_read() {
+    let stub = StubServer::start().await;
+    let writer = stub.writer();
+
+    // A row with a field the entity does not have, which takes the answer past the limit.
+    let big_row = format!(
+        r#"{{"PartitionKey":"pk","RowKey":"rk","TimeStamp":"2026-08-12T18:19:36.776352","Padding":"{}"}}"#,
+        "x".repeat(flurl::DEFAULT_MAX_RESPONSE_BODY_SIZE)
+    );
+
+    stub.answers(200, big_row.as_str());
+
+    assert_eq!(
+        writer.get_entity("pk", "rk", None).await.unwrap(),
+        Some(row())
+    );
+
+    stub.answers(200, format!("[{}]", big_row).as_str());
+
+    assert_eq!(writer.get_all().await.unwrap(), Some(vec![row()]));
+}
+
+/// The limit is the writer's to set - on the writer or on its builder - and the writer of
+/// `with_retries` reads with it too: an answer of exactly the limit is read, a bigger one is
+/// refused.
+#[tokio::test]
+async fn the_limit_of_an_answer_is_set_by_the_writer() {
+    fn assert_too_large<T: std::fmt::Debug>(result: Result<T, DataWriterError>, limit: usize) {
+        match result {
+            Err(DataWriterError::FlUrlError(flurl::FlUrlError::ResponseBodyTooLarge {
+                limit: reported,
+            })) => assert_eq!(reported, limit),
+            other => panic!("the answer over the limit was not refused: {:?}", other),
+        }
+    }
+
+    let stub = StubServer::start().await;
+    stub.answers(200, ROW);
+
+    let mut writer = stub.writer();
+
+    writer.set_body_size_limit(ROW.len());
+
+    assert_eq!(
+        writer.get_entity("pk", "rk", None).await.unwrap(),
+        Some(row())
+    );
+
+    writer.set_body_size_limit(ROW.len() - 1);
+
+    assert_too_large(writer.get_entity("pk", "rk", None).await, ROW.len() - 1);
+    assert_too_large(
+        writer
+            .with_retries(1)
+            .get_entity("pk", "rk", None)
+            .await,
+        ROW.len() - 1,
+    );
+
+    let writer = MyNoSqlDataWriter::<TestEntity>::create_with_builder(Arc::new(TestSettings {
+        url: stub.url.clone(),
+    }))
+    .do_not_auto_create_table()
+    .use_h1()
+    .set_body_size_limit(ROW.len() - 1)
+    .build();
+
+    assert_too_large(writer.get_entity("pk", "rk", None).await, ROW.len() - 1);
+}
+
 #[tokio::test]
 async fn the_errors_the_api_names_stay_typed() {
     let stub = StubServer::start().await;

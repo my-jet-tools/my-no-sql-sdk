@@ -86,6 +86,14 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send> MyNoSqlData
         crate::PING_POOL.use_h1(self.fl_url_factory.get_settings(), TEntity::TABLE_NAME);
     }
 
+    /// The largest answer the writer reads, in bytes: 100 MB unless it is set here
+    /// ([`super::DEFAULT_BODY_SIZE_LIMIT`]). A bigger answer fails the call with
+    /// `FlUrlError::ResponseBodyTooLarge`; `usize::MAX` lifts the limit. The writers of
+    /// [`Self::with_retries`] made after the call read with the limit set here.
+    pub fn set_body_size_limit(&mut self, value: usize) {
+        self.fl_url_factory.set_body_size_limit(value);
+    }
+
     /// Creates the table with `params`; a table which is already there is
     /// [`DataWriterError::TableAlreadyExists`].
     ///

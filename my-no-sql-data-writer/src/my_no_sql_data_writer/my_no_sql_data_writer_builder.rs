@@ -11,6 +11,7 @@ pub struct MyNoSqlDataWriterBuilder<TEntity: MyNoSqlEntity + MyNoSqlEntitySerial
     sync_period: DataSynchronizationPeriod,
     create_table_params: Option<CreateTableParams>,
     use_h1: bool,
+    body_size_limit: Option<usize>,
 }
 
 impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
@@ -28,6 +29,7 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
             }
             .into(),
             use_h1: false,
+            body_size_limit: None,
         }
     }
 
@@ -36,6 +38,14 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
         self.use_h1 = true;
         self
     }
+
+    /// The largest answer the writer reads, in bytes - see
+    /// [`MyNoSqlDataWriter::set_body_size_limit`].
+    pub fn set_body_size_limit(mut self, value: usize) -> Self {
+        self.body_size_limit = Some(value);
+        self
+    }
+
     pub fn set_sync_period(mut self, sync_period: DataSynchronizationPeriod) -> Self {
         self.sync_period = sync_period;
         self
@@ -73,6 +83,10 @@ impl<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>
 
         if self.use_h1 {
             result.use_h1();
+        }
+
+        if let Some(body_size_limit) = self.body_size_limit {
+            result.set_body_size_limit(body_size_limit);
         }
 
         result
