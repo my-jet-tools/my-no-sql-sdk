@@ -62,7 +62,7 @@ impl FlUrlFactory {
     /// `FlUrl::new` never fails and never panics: a url it can not use becomes the error the
     /// request would fail with. It is asked for here, before anything is sent, so that the call
     /// returns it - and so does the ping loop, which is a single task nothing starts again.
-    async fn create_fl_url(
+    fn create_fl_url(
         &self,
         connection_string: &ConnectionString,
     ) -> Result<FlUrl, DataWriterError> {
@@ -109,7 +109,7 @@ impl FlUrlFactory {
             self.create_table_is_called.set_value(true);
         }
 
-        let result = self.create_fl_url(&connection_string).await?;
+        let result = self.create_fl_url(&connection_string)?;
 
         Ok((result, connection_string.host))
     }
@@ -129,7 +129,7 @@ impl FlUrlFactory {
     ) -> Result<(FlUrl, String), DataWriterError> {
         let connection_string = parse_connection_string(self.settings.get_url().await.as_str())?;
 
-        let result = self.create_fl_url(&connection_string).await?;
+        let result = self.create_fl_url(&connection_string)?;
 
         Ok((result, connection_string.host))
     }
@@ -148,7 +148,7 @@ impl FlUrlFactory {
         connection_string: &ConnectionString,
         create_table_params: &CreateTableParams,
     ) -> Result<(), DataWriterError> {
-        let fl_url = self.create_fl_url(connection_string).await?;
+        let fl_url = self.create_fl_url(connection_string)?;
         super::execution::create_table_if_not_exists(
             fl_url,
             connection_string.host.as_str(),

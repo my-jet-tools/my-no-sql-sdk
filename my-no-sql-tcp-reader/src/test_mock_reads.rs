@@ -57,7 +57,7 @@ fn row_keys_of_map(rows: Option<BTreeMap<String, Arc<TestEntity>>>) -> Option<Ve
 
 /// What the reads through a filter answer: for a filter which takes some rows of the partition,
 /// for one which takes none of them, and for a partition which is not there.
-async fn reads_through_a_filter<TReader: MyNoSqlDataReader<TestEntity>>(
+fn reads_through_a_filter<TReader: MyNoSqlDataReader<TestEntity>>(
     reader: &TReader,
 ) -> Vec<Option<Vec<String>>> {
     let mut result = Vec::new();
@@ -68,15 +68,13 @@ async fn reads_through_a_filter<TReader: MyNoSqlDataReader<TestEntity>>(
         result.push(row_keys_of_vec(
             reader
                 .get_entities(partition_key)
-                .get_as_vec_with_filter(|row| row.row_key == row_key_to_take)
-                .await,
+                .get_as_vec_with_filter(|row| row.row_key == row_key_to_take),
         ));
 
         result.push(row_keys_of_map(
             reader
                 .get_entities(partition_key)
-                .get_as_btree_map_with_filter(|row| row.row_key == row_key_to_take)
-                .await,
+                .get_as_btree_map_with_filter(|row| row.row_key == row_key_to_take),
         ));
     }
 
@@ -108,7 +106,7 @@ async fn a_read_through_a_filter_answers_the_way_the_tcp_reader_answers() {
         br#"[{"PartitionKey":"pk","RowKey":"rk1"},{"PartitionKey":"pk","RowKey":"rk2"}]"#.to_vec(),
     );
 
-    let of_the_reader = reads_through_a_filter(&reader).await;
+    let of_the_reader = reads_through_a_filter(&reader);
 
     assert_eq!(
         of_the_reader,
@@ -125,5 +123,5 @@ async fn a_read_through_a_filter_answers_the_way_the_tcp_reader_answers() {
         ]
     );
 
-    assert_eq!(reads_through_a_filter(&mock).await, of_the_reader);
+    assert_eq!(reads_through_a_filter(&mock), of_the_reader);
 }

@@ -48,7 +48,7 @@ impl<'s, TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send +
         self.update_statistic_data.row_expiration_moment = Some(value);
     }
 
-    pub async fn execute(&self) -> Option<Arc<TMyNoSqlEntity>> {
+    pub fn execute(&self) -> Option<Arc<TMyNoSqlEntity>> {
         let result = {
             let mut reader = self.inner.get_data().lock();
             reader.get_entity(self.partition_key, self.row_key)

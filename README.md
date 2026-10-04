@@ -610,7 +610,7 @@ let all = instruments.get_table_snapshot_as_vec();                 // Option<Vec
 
 Reads which also report last-read / expiration moments back to the server — `get_entities(..)` and
 `get_entity_with_callback_to_server(..)` — are builders (`GetEntitiesBuilder` / `GetEntityBuilder`, exported from
-`my_no_sql_sdk::reader`) whose final call is `async` (`.get_as_vec().await`, `.execute().await`); see
+`my_no_sql_sdk::reader`) whose final call is synchronous, like every other read (`.get_as_vec()`, `.execute()`); see
 [my-no-sql-tcp-reader/README.md](my-no-sql-tcp-reader/README.md).
 
 The reports are queued and sent in the background, one at a time, each after the server has confirmed the one

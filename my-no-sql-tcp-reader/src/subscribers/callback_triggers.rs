@@ -106,7 +106,7 @@ pub fn trigger_partition_difference_sync<
 }
 
 #[cfg(test)]
-pub async fn trigger_table_difference<
+pub fn trigger_table_difference<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
     TMyNoSqlDataReaderCallBacks: MyNoSqlDataReaderCallBacks<TMyNoSqlEntity>,
 >(
@@ -116,16 +116,16 @@ pub async fn trigger_table_difference<
 ) {
     match before {
         Some(before) => {
-            trigger_old_and_new_table_difference(callbacks, before, now_entities).await;
+            trigger_old_and_new_table_difference(callbacks, before, now_entities);
         }
         None => {
-            trigger_brand_new_table(callbacks, now_entities).await;
+            trigger_brand_new_table(callbacks, now_entities);
         }
     }
 }
 
 #[cfg(test)]
-pub async fn trigger_brand_new_table<
+pub fn trigger_brand_new_table<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
     TMyNoSqlDataReaderCallBacks: MyNoSqlDataReaderCallBacks<TMyNoSqlEntity>,
 >(
@@ -146,7 +146,7 @@ pub async fn trigger_brand_new_table<
 }
 
 #[cfg(test)]
-pub async fn trigger_old_and_new_table_difference<
+pub fn trigger_old_and_new_table_difference<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
     TMyNoSqlDataReaderCallBacks: MyNoSqlDataReaderCallBacks<TMyNoSqlEntity>,
 >(
@@ -162,8 +162,7 @@ pub async fn trigger_old_and_new_table_difference<
             now_partition_key,
             before_partition,
             now_partition,
-        )
-        .await;
+        );
     }
 
     for (before_partition_key, before_partition) in before {
@@ -181,7 +180,7 @@ pub async fn trigger_old_and_new_table_difference<
 }
 
 #[cfg(test)]
-pub async fn trigger_partition_difference<
+pub fn trigger_partition_difference<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
     TMyNoSqlDataReaderCallBacks: MyNoSqlDataReaderCallBacks<TMyNoSqlEntity>,
 >(
@@ -221,13 +220,13 @@ pub async fn trigger_partition_difference<
             }
         }
         None => {
-            trigger_brand_new_partition(callbacks, partition_key, now_partition).await;
+            trigger_brand_new_partition(callbacks, partition_key, now_partition);
         }
     }
 }
 
 #[cfg(test)]
-pub async fn trigger_brand_new_partition<
+pub fn trigger_brand_new_partition<
     TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Send + Sync + 'static,
     TMyNoSqlDataReaderCallBacks: MyNoSqlDataReaderCallBacks<TMyNoSqlEntity>,
 >(
@@ -357,8 +356,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    pub async fn test_we_had_data_in_table_and_new_table_is_empty() {
+    #[test]
+    pub fn test_we_had_data_in_table_and_new_table_is_empty() {
         let test_callback = TestCallbacks::new();
 
         let mut before_rows: BTreeMap<String, LazyMyNoSqlEntity<TestRow>> = BTreeMap::new();
@@ -378,15 +377,15 @@ mod tests {
 
         let after = BTreeMap::new();
 
-        super::trigger_table_difference(&test_callback, Some(before), &after).await;
+        super::trigger_table_difference(&test_callback, Some(before), &after);
 
         let read_access = test_callback.data.lock();
 
         assert_eq!(2, read_access.deleted.get("PK1").unwrap().len());
     }
 
-    #[tokio::test]
-    pub async fn test_brand_new_table() {
+    #[test]
+    pub fn test_brand_new_table() {
         let test_callback = TestCallbacks::new();
 
         let mut after_rows: BTreeMap<String, LazyMyNoSqlEntity<TestRow>> = BTreeMap::new();
@@ -404,7 +403,7 @@ mod tests {
 
         after.insert("PK1".to_string(), after_rows);
 
-        super::trigger_table_difference(&test_callback, None, &after).await;
+        super::trigger_table_difference(&test_callback, None, &after);
 
         let read_access = test_callback.data.lock();
         assert_eq!(
@@ -417,8 +416,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    pub async fn test_we_have_updates_in_table() {
+    #[test]
+    pub fn test_we_have_updates_in_table() {
         let test_callback = TestCallbacks::new();
 
         let mut before_partition: BTreeMap<String, LazyMyNoSqlEntity<TestRow>> = BTreeMap::new();
@@ -444,7 +443,7 @@ mod tests {
         let mut after = BTreeMap::new();
         after.insert("PK1".to_string(), after_partition);
 
-        super::trigger_table_difference(&test_callback, Some(before), &after).await;
+        super::trigger_table_difference(&test_callback, Some(before), &after);
 
         let read_access = test_callback.data.lock();
         assert_eq!(

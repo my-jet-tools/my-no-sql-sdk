@@ -76,11 +76,11 @@ impl<'s, TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send +
         self
     }
 
-    pub async fn execute(&self) -> Option<Arc<TMyNoSqlEntity>> {
+    pub fn execute(&self) -> Option<Arc<TMyNoSqlEntity>> {
         match self {
-            GetEntityBuilder::Inner(inner) => inner.execute().await,
+            GetEntityBuilder::Inner(inner) => inner.execute(),
             #[cfg(feature = "mocks")]
-            GetEntityBuilder::Mock(inner) => inner.execute().await,
+            GetEntityBuilder::Mock(inner) => inner.execute(),
         }
     }
 }

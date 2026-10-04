@@ -75,8 +75,7 @@ let entity = reader
          .set_row_last_read_moment()
          .set_partition_last_read_moment()
          .set_row_expiration_moment(Some(expires))
-         .execute()
-         .await;
+         .execute();
          
 println!("{:?}", entity);
 ```

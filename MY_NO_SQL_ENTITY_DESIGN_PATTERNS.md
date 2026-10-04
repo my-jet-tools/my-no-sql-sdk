@@ -299,7 +299,7 @@ TCP reader — subscribes to a table, keeps a local copy. Reads are local, no ne
 
 #### Reader API (MyNoSqlDataReaderTcp)
 
-All reader read-methods are **synchronous** (a short `parking_lot` mutex on the in-memory copy, no I/O). `async` are only `wait_until_first_data_arrives` and the final calls of the `get_entities(..)` / `get_entity_with_callback_to_server(..)` builders (`get_as_vec()`, `get_as_btree_map()`, `execute()`, …).
+All reader read-methods are **synchronous** (a short `parking_lot` mutex on the in-memory copy, no I/O). The final calls of the `get_entities(..)` / `get_entity_with_callback_to_server(..)` builders (`get_as_vec()`, `get_as_btree_map()`, `execute()`, …) are synchronous too: the moments they report are queued and sent in the background. `async` is only `wait_until_first_data_arrives`.
 
 ```rust
 // Get all in partition → Option<BTreeMap<String, Arc<T>>>
@@ -414,7 +414,7 @@ let entity = SessionEntity {
 | Mistake | Fix |
 |---|---|
 | Calling writer directly without retries | Always `writer.with_retries(3).method()` — the base writer is only for what the wrapper does not have (the chunked `*_by_chunks*` flows, `create_table*`) |
-| Awaiting reader read-methods (`reader.get_entity(...).await`) | Reader reads are **sync** now — no `.await`. Only `wait_until_first_data_arrives` and the final calls of the `get_entities(..)` / `get_entity_with_callback_to_server(..)` builders are async |
+| Awaiting reader read-methods (`reader.get_entity(...).await`) | Reader reads are **sync** now — no `.await`. The final calls of the `get_entities(..)` / `get_entity_with_callback_to_server(..)` builders too. Only `wait_until_first_data_arrives` is async |
 | Expecting `Vec<Arc<T>>` from reader `get_by_partition_key` | Returns `Option<BTreeMap<String, Arc<T>>>` (row_key → entity). Use `get_by_partition_key_as_vec` for just values |
 | Expecting `Option<Vec<Arc<T>>>` from writer `get_by_partition_key` | Writer returns `Result<Option<Vec<T>>>` — owned T, not Arc |
 | Duplicating entity struct across multiple projects | Shared crate |

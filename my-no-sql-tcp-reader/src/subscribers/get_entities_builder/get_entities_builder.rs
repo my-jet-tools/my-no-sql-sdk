@@ -69,39 +69,39 @@ impl<TMyNoSqlEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send + 'st
         self
     }
 
-    pub async fn get_as_vec(&self) -> Option<Vec<Arc<TMyNoSqlEntity>>> {
+    pub fn get_as_vec(&self) -> Option<Vec<Arc<TMyNoSqlEntity>>> {
         match &self {
-            GetEntitiesBuilder::Inner(inner) => inner.get_as_vec().await,
+            GetEntitiesBuilder::Inner(inner) => inner.get_as_vec(),
             #[cfg(feature = "mocks")]
             GetEntitiesBuilder::Mock(inner) => inner.get_as_vec(),
         }
     }
 
-    pub async fn get_as_vec_with_filter(
+    pub fn get_as_vec_with_filter(
         &self,
         filter: impl Fn(&TMyNoSqlEntity) -> bool,
     ) -> Option<Vec<Arc<TMyNoSqlEntity>>> {
         match &self {
-            GetEntitiesBuilder::Inner(inner) => inner.get_as_vec_with_filter(filter).await,
+            GetEntitiesBuilder::Inner(inner) => inner.get_as_vec_with_filter(filter),
             #[cfg(feature = "mocks")]
             GetEntitiesBuilder::Mock(inner) => inner.get_as_vec_with_filter(filter),
         }
     }
 
-    pub async fn get_as_btree_map(&self) -> Option<BTreeMap<String, Arc<TMyNoSqlEntity>>> {
+    pub fn get_as_btree_map(&self) -> Option<BTreeMap<String, Arc<TMyNoSqlEntity>>> {
         match &self {
-            GetEntitiesBuilder::Inner(inner) => inner.get_as_btree_map().await,
+            GetEntitiesBuilder::Inner(inner) => inner.get_as_btree_map(),
             #[cfg(feature = "mocks")]
             GetEntitiesBuilder::Mock(inner) => inner.get_as_btree_map(),
         }
     }
 
-    pub async fn get_as_btree_map_with_filter(
+    pub fn get_as_btree_map_with_filter(
         &self,
         filter: impl Fn(&TMyNoSqlEntity) -> bool,
     ) -> Option<BTreeMap<String, Arc<TMyNoSqlEntity>>> {
         match &self {
-            GetEntitiesBuilder::Inner(inner) => inner.get_as_btree_map_with_filter(filter).await,
+            GetEntitiesBuilder::Inner(inner) => inner.get_as_btree_map_with_filter(filter),
             #[cfg(feature = "mocks")]
             GetEntitiesBuilder::Mock(inner) => inner.get_as_btree_map_with_filter(filter),
         }
