@@ -1,4 +1,4 @@
-use flurl::{body::HttpRequestBody, FlUrl, FlUrlResponse};
+use flurl::{body::HttpRequestBody, FlUrlResponse};
 use my_json::{
     json_reader::JsonArrayIterator,
     json_writer::{JsonArrayWriter, RawJsonObject},
@@ -17,6 +17,7 @@ use super::delete_if::{
     RowToDeleteIf,
 };
 use super::fl_url_ext::FlUrlExt;
+use super::{WriterFlUrl, WriterFlUrlResponse};
 
 const API_SEGMENT: &str = "api";
 
@@ -30,7 +31,7 @@ const PARTITIONS_CONTROLLER: &str = "Partitions";
 const COUNT_SEGMENT: &str = "Count";
 
 pub async fn create_table_if_not_exists(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     url: &str,
     table_name: &'static str,
     params: &CreateTableParams,
@@ -42,7 +43,7 @@ pub async fn create_table_if_not_exists(
         .append_data_sync_period(&sync_period)
         .with_table_name_as_query_param(table_name);
 
-    let fl_url = params.populate_params(fl_url);
+    let fl_url = fl_url.map(|fl_url| params.populate_params(fl_url));
 
     let mut response = fl_url.post(HttpRequestBody::Empty).await?;
 
@@ -50,7 +51,7 @@ pub async fn create_table_if_not_exists(
 }
 
 pub async fn create_table(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     url: &str,
     table_name: &str,
     params: CreateTableParams,
@@ -62,7 +63,7 @@ pub async fn create_table(
         .with_table_name_as_query_param(table_name)
         .append_data_sync_period(sync_period);
 
-    let fl_url = params.populate_params(fl_url);
+    let fl_url = fl_url.map(|fl_url| params.populate_params(fl_url));
 
     let mut response = fl_url.post(HttpRequestBody::Empty).await?;
 
@@ -79,7 +80,7 @@ pub async fn create_table(
 /// Any answer which is neither a 2xx nor the typed error of [`check_error`] is an error which
 /// names the call - see [`unexpected_response`].
 pub async fn insert_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entity: &TEntity,
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -111,7 +112,7 @@ pub async fn insert_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sy
 pub async fn insert_or_replace_entity<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entity: &TEntity,
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -151,7 +152,7 @@ pub async fn insert_or_replace_entity<
 /// [`unexpected_response`]. It is not a lost race, and `insert_or_update` does not read again
 /// because of it.
 pub async fn replace_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entity: &TEntity,
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -186,7 +187,7 @@ pub async fn replace_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + S
 pub async fn bulk_insert_or_replace<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[TEntity],
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -224,7 +225,7 @@ pub async fn bulk_insert_or_replace<
 pub async fn bulk_insert_or_update_with_own_timestamp<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[TEntity],
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -266,7 +267,7 @@ pub async fn bulk_insert_or_update_with_own_timestamp<
 ///
 /// Read the way [`insert_or_replace_entity`] is.
 pub async fn bulk_delete<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     rows_to_delete: &BTreeMap<String, Vec<String>>,
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -317,7 +318,7 @@ pub async fn bulk_delete<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync
 /// of reporting that row as skipped (a `debug_assert!` panic in a debug build). An empty slice
 /// is a no-op (no request at all), like [`bulk_delete`].
 pub async fn bulk_delete_if<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[&TEntity],
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<BulkDeleteIfResult, DataWriterError> {
@@ -345,7 +346,7 @@ pub async fn bulk_delete_if<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + S
 /// for when the versions come from somewhere else than the entities (a projection, a change
 /// log, another service). Same contract in every other respect.
 pub async fn bulk_delete_if_rows<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     rows: &[RowToDeleteIf],
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<BulkDeleteIfResult, DataWriterError> {
@@ -375,7 +376,7 @@ pub async fn bulk_delete_if_rows<TEntity: MyNoSqlEntity + MyNoSqlEntitySerialize
 /// them which sends it - the name an answer the call has no meaning for is reported under, see
 /// [`unexpected_response`].
 async fn send_bulk_delete_if<TEntity: MyNoSqlEntity>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     body: Vec<u8>,
     sync_period: &DataSynchronizationPeriod,
     operation: &str,
@@ -407,7 +408,7 @@ async fn send_bulk_delete_if<TEntity: MyNoSqlEntity>(
 /// and comes back as an error - see [`unexpected_response`]; so does a 2xx whose body is not
 /// the row - see [`read_entity`].
 pub async fn get_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     partition_key: &str,
     row_key: &str,
     update_read_statistics: Option<&UpdateReadStatistics>,
@@ -419,7 +420,7 @@ pub async fn get_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync 
         .with_table_name_as_query_param(TEntity::TABLE_NAME);
 
     if let Some(update_read_statistics) = update_read_statistics {
-        request = update_read_statistics.fill_fields(request);
+        request = request.map(|request| update_read_statistics.fill_fields(request));
     }
 
     let mut response = request.get().await?;
@@ -449,7 +450,7 @@ pub async fn get_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync 
 pub async fn get_by_partition_key<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     partition_key: &str,
     update_read_statistics: Option<&UpdateReadStatistics>,
 ) -> Result<Option<Vec<TEntity>>, DataWriterError> {
@@ -459,7 +460,7 @@ pub async fn get_by_partition_key<
         .with_table_name_as_query_param(TEntity::TABLE_NAME);
 
     if let Some(update_read_statistics) = update_read_statistics {
-        request = update_read_statistics.fill_fields(request);
+        request = request.map(|request| update_read_statistics.fill_fields(request));
     }
 
     let mut response = request.get().await?;
@@ -485,7 +486,7 @@ pub async fn get_by_partition_key<
 /// ([`super::fl_url_factory::FlUrlFactory::get_fl_url_without_auto_create_table`]), or the
 /// table would exist by the time it is counted and `None` could never be returned.
 pub async fn get_rows_count(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     table_name: &str,
     partition_key: Option<&str>,
 ) -> Result<Option<usize>, DataWriterError> {
@@ -527,7 +528,7 @@ pub async fn get_enum_case_models_by_partition_key<
         + Send
         + 'static,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     update_read_statistics: Option<&UpdateReadStatistics>,
 ) -> Result<Option<Vec<TResult>>, DataWriterError> {
     let result: Option<Vec<TEntity>> =
@@ -556,7 +557,7 @@ pub async fn get_enum_case_model<
         + Send
         + 'static,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     update_read_statistics: Option<&UpdateReadStatistics>,
 ) -> Result<Option<TResult>, DataWriterError> {
     let entity: Option<TEntity> = get_entity(
@@ -578,7 +579,7 @@ pub async fn get_enum_case_model<
 /// Read the way [`get_by_partition_key`] is: a 2xx is `Ok(Some(entities))` - `Ok(Some(vec![]))`
 /// when no partition holds such a row - and the `Option` is always `Some`.
 pub async fn get_by_row_key<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     row_key: &str,
 ) -> Result<Option<Vec<TEntity>>, DataWriterError> {
     let mut response = flurl
@@ -608,7 +609,7 @@ pub async fn get_by_row_key<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + S
 /// nobody serves included) - and never an empty list, which would read as "the table is
 /// empty".
 pub async fn get_partition_keys(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     table_name: &str,
     skip: Option<i32>,
     limit: Option<i32>,
@@ -663,7 +664,7 @@ pub async fn delete_enum_case<
         + Send
         + 'static,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<Option<TResult>, DataWriterError> {
     let entity: Option<TEntity> =
@@ -684,7 +685,7 @@ pub async fn delete_enum_case_with_row_key<
         + Send
         + 'static,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     row_key: &str,
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<Option<TResult>, DataWriterError> {
@@ -705,7 +706,7 @@ pub async fn delete_enum_case_with_row_key<
 /// [`check_error`]. Any other answer - a 404 too, which the API never gives to this request -
 /// is an error, see [`unexpected_response`].
 pub async fn delete_row<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     partition_key: &str,
     row_key: &str,
     sync_period: &DataSynchronizationPeriod,
@@ -749,7 +750,7 @@ pub async fn delete_row<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync 
 /// Use it as read → decide → delete exactly the version that was read. On a conflict re-read
 /// and decide again — the row may no longer be one you want to delete.
 pub async fn delete_row_if<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     partition_key: &str,
     row_key: &str,
     time_stamp: Timestamp,
@@ -800,7 +801,7 @@ pub async fn delete_row_if<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sy
 /// This is one request: the keys have to fit into its head. The callers hand it one list of
 /// [`split_partition_keys`] at a time.
 pub async fn delete_partitions(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     table_name: &str,
     partition_keys: &[&str],
     sync_period: &DataSynchronizationPeriod,
@@ -886,7 +887,7 @@ fn partition_key_query_pair_size(partition_key: &str) -> usize {
 /// Read the way [`get_by_partition_key`] is: a 2xx is `Ok(Some(entities))` - `Ok(Some(vec![]))`
 /// for a table which holds no rows - and the `Option` is always `Some`.
 pub async fn get_all<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send>(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
 ) -> Result<Option<Vec<TEntity>>, DataWriterError> {
     let mut response = flurl
         .append_path_segment(ROW_CONTROLLER)
@@ -913,7 +914,7 @@ pub async fn get_all<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + S
 pub async fn clean_table_and_bulk_insert<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[TEntity],
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -946,7 +947,7 @@ pub async fn clean_table_and_bulk_insert<
 pub async fn clean_partition_and_bulk_insert<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     partition_key: &str,
     entities: &[TEntity],
     sync_period: &DataSynchronizationPeriod,
@@ -983,7 +984,7 @@ pub async fn clean_partition_and_bulk_insert<
 pub async fn clean_table_and_bulk_insert_with_own_timestamp<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[TEntity],
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -1024,7 +1025,7 @@ pub async fn clean_table_and_bulk_insert_with_own_timestamp<
 pub async fn clean_partition_and_bulk_insert_with_own_timestamp<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     partition_key: &str,
     entities: &[TEntity],
     sync_period: &DataSynchronizationPeriod,
@@ -1072,7 +1073,7 @@ pub async fn clean_partition_and_bulk_insert_with_own_timestamp<
 pub async fn insert_or_replace_entity_if_new<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entity: &TEntity,
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -1112,7 +1113,7 @@ pub async fn insert_or_replace_entity_if_new<
 pub async fn bulk_insert_or_replace_if_new<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[TEntity],
     sync_period: &DataSynchronizationPeriod,
 ) -> Result<(), DataWriterError> {
@@ -1163,7 +1164,7 @@ pub async fn bulk_insert_or_replace_if_new<
 pub async fn insert_or_replace_if_new_by_chunks_upload<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[TEntity],
     process_id: Option<&str>,
 ) -> Result<String, DataWriterError> {
@@ -1218,7 +1219,7 @@ pub async fn insert_or_replace_if_new_by_chunks_upload<
 /// Read the way [`insert_or_replace_if_new_by_chunks_upload`] is. `table_name` is only what an
 /// error names: the request carries the process and nothing else.
 pub async fn insert_or_replace_if_new_by_chunks_commit(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     table_name: &str,
     process_id: &str,
     sync_period: &DataSynchronizationPeriod,
@@ -1251,7 +1252,7 @@ pub async fn insert_or_replace_if_new_by_chunks_commit(
 ///
 /// Read the way [`insert_or_replace_if_new_by_chunks_commit`] is.
 pub async fn insert_or_replace_if_new_by_chunks_cancel(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     table_name: &str,
     process_id: &str,
 ) -> Result<(), DataWriterError> {
@@ -1289,7 +1290,7 @@ pub async fn insert_or_replace_if_new_by_chunks_cancel(
 pub async fn clean_and_bulk_insert_by_chunks_with_own_timestamp_upload<
     TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer + Sync + Send,
 >(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     entities: &[TEntity],
     partition_key: Option<&str>,
     process_id: Option<&str>,
@@ -1353,7 +1354,7 @@ pub async fn clean_and_bulk_insert_by_chunks_with_own_timestamp_upload<
 /// error names the call the writer makes it under -
 /// `clean_and_bulk_insert_by_chunks_with_own_timestamp_commit`.
 pub async fn clean_and_bulk_insert_by_chunks_commit(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     table_name: &str,
     process_id: &str,
     sync_period: &DataSynchronizationPeriod,
@@ -1386,7 +1387,7 @@ pub async fn clean_and_bulk_insert_by_chunks_commit(
 ///
 /// Read the way [`clean_and_bulk_insert_by_chunks_commit`] is.
 pub async fn clean_and_bulk_insert_by_chunks_cancel(
-    flurl: FlUrl,
+    flurl: WriterFlUrl,
     table_name: &str,
     process_id: &str,
 ) -> Result<(), DataWriterError> {
@@ -1470,7 +1471,7 @@ fn serialize_entities_to_body<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer>(
 /// rewritten, so it is not [`DataWriterError::RecordIsChanged`]: it is left to
 /// [`unexpected_response`], which names the call and carries what the server said.
 async fn check_error_of_a_bulk_process(
-    response: &mut FlUrlResponse,
+    response: &mut WriterFlUrlResponse,
 ) -> Result<(), DataWriterError> {
     if response.get_status_code() == 409 {
         return Ok(());
@@ -1479,7 +1480,7 @@ async fn check_error_of_a_bulk_process(
     check_error(response).await
 }
 
-async fn check_error(response: &mut FlUrlResponse) -> Result<(), DataWriterError> {
+async fn check_error(response: &mut WriterFlUrlResponse) -> Result<(), DataWriterError> {
     let result = match response.get_status_code() {
         400 => Err(deserialize_error(response).await?),
 
@@ -1549,7 +1550,7 @@ fn is_expected_outcome(err: &DataWriterError) -> bool {
 /// present and full, so a body which is not the contract falls through to be reported as the
 /// failure it is. 404 is accepted next to 400 only under that condition, so this keeps working
 /// if the server ever moves the status.
-async fn is_table_not_found(response: &mut FlUrlResponse) -> Result<bool, DataWriterError> {
+async fn is_table_not_found(response: &mut WriterFlUrlResponse) -> Result<bool, DataWriterError> {
     match response.get_status_code() {
         400 | 404 => match deserialize_error(response).await {
             Ok(DataWriterError::TableNotFound(_)) => Ok(true),
@@ -1585,7 +1586,7 @@ const RECORD_NOT_FOUND_BODY: &str = "Record not found";
 /// `insert_or_update` take it for a race it has lost and read again, attempt after attempt.
 /// Such a 404 is left to [`unexpected_response`], which makes an error of it. The same rule as
 /// in [`is_table_not_found`].
-async fn is_record_not_found(response: &mut FlUrlResponse) -> Result<bool, DataWriterError> {
+async fn is_record_not_found(response: &mut WriterFlUrlResponse) -> Result<bool, DataWriterError> {
     if response.get_status_code() != 404 {
         return Ok(false);
     }
@@ -1615,7 +1616,7 @@ fn is_record_not_found_body(body: &[u8]) -> bool {
 /// which is still starting from a route which does not exist. `operation` and `table_name` say
 /// which call it was. A long body is cut, see [`BODY_IN_ERROR_LIMIT`].
 async fn unexpected_response<TResult>(
-    response: &mut FlUrlResponse,
+    response: &mut WriterFlUrlResponse,
     operation: &str,
     table_name: &str,
 ) -> Result<TResult, DataWriterError> {
@@ -1689,7 +1690,7 @@ fn parse_rows_count(body: &[u8]) -> Result<usize, DataWriterError> {
 }
 
 async fn deserialize_error(
-    response: &mut FlUrlResponse,
+    response: &mut WriterFlUrlResponse,
 ) -> Result<DataWriterError, DataWriterError> {
     let body = response.get_body_as_slice().await?;
 
@@ -1768,7 +1769,7 @@ fn not_an_array_of_entities<TEntity: MyNoSqlEntity>(
 /// reported the way [`unexpected_response`] reports a status, with what the deserializer said,
 /// and never by a panic which would take the calling task down.
 async fn read_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer>(
-    response: &mut FlUrlResponse,
+    response: &mut WriterFlUrlResponse,
     operation: &str,
 ) -> Result<TEntity, DataWriterError> {
     let status_code = response.get_status_code();
@@ -1793,7 +1794,7 @@ async fn read_entity<TEntity: MyNoSqlEntity + MyNoSqlEntitySerializer>(
 /// [`unexpected_response`] reports it, under `process_name`. Unlike the other calls these two
 /// write every failure to the log themselves, with the url.
 async fn create_table_errors_handler(
-    response: &mut FlUrlResponse,
+    response: &mut WriterFlUrlResponse,
     process_name: &'static str,
     table_name: &str,
     url: &str,
@@ -2371,7 +2372,10 @@ mod tests {
     )]
     async fn bulk_insert_or_update_with_own_timestamp_refuses_a_default_timestamp() {
         let _ = super::bulk_insert_or_update_with_own_timestamp(
-            flurl::FlUrl::new("http://127.0.0.1:0"),
+            super::WriterFlUrl::new(
+                flurl::FlUrl::new("http://127.0.0.1:0"),
+                crate::DEFAULT_BODY_SIZE_LIMIT,
+            ),
             &[entity_with_default_time_stamp()],
             &my_no_sql_abstractions::DataSynchronizationPeriod::Immediately,
         )
@@ -2385,7 +2389,10 @@ mod tests {
     )]
     async fn insert_or_replace_entity_if_new_refuses_a_default_timestamp() {
         let _ = super::insert_or_replace_entity_if_new(
-            flurl::FlUrl::new("http://127.0.0.1:0"),
+            super::WriterFlUrl::new(
+                flurl::FlUrl::new("http://127.0.0.1:0"),
+                crate::DEFAULT_BODY_SIZE_LIMIT,
+            ),
             &entity_with_default_time_stamp(),
             &my_no_sql_abstractions::DataSynchronizationPeriod::Immediately,
         )
@@ -2399,7 +2406,10 @@ mod tests {
     )]
     async fn bulk_insert_or_replace_if_new_refuses_a_default_timestamp() {
         let _ = super::bulk_insert_or_replace_if_new(
-            flurl::FlUrl::new("http://127.0.0.1:0"),
+            super::WriterFlUrl::new(
+                flurl::FlUrl::new("http://127.0.0.1:0"),
+                crate::DEFAULT_BODY_SIZE_LIMIT,
+            ),
             &[entity_with_default_time_stamp()],
             &my_no_sql_abstractions::DataSynchronizationPeriod::Immediately,
         )
@@ -2413,7 +2423,10 @@ mod tests {
     )]
     async fn a_chunk_of_insert_or_replace_if_new_refuses_a_default_timestamp() {
         let _ = super::insert_or_replace_if_new_by_chunks_upload(
-            flurl::FlUrl::new("http://127.0.0.1:0"),
+            super::WriterFlUrl::new(
+                flurl::FlUrl::new("http://127.0.0.1:0"),
+                crate::DEFAULT_BODY_SIZE_LIMIT,
+            ),
             &[entity_with_default_time_stamp()],
             None,
         )
@@ -2423,7 +2436,10 @@ mod tests {
     #[tokio::test]
     async fn empty_bulk_insert_or_replace_if_new_is_ok() {
         // The empty-slice guard returns before any request is built, so no server is needed.
-        let flurl = flurl::FlUrl::new("http://127.0.0.1:0");
+        let flurl = super::WriterFlUrl::new(
+                flurl::FlUrl::new("http://127.0.0.1:0"),
+                crate::DEFAULT_BODY_SIZE_LIMIT,
+            );
         let result = super::bulk_insert_or_replace_if_new::<TimeStampedTestEntity>(
             flurl,
             &[],
@@ -2439,7 +2455,10 @@ mod tests {
         // Same empty-input guard as bulk_delete: the answer is built without a request, so
         // no server is needed.
         let result = super::bulk_delete_if::<TimeStampedTestEntity>(
-            flurl::FlUrl::new("http://127.0.0.1:0"),
+            super::WriterFlUrl::new(
+                flurl::FlUrl::new("http://127.0.0.1:0"),
+                crate::DEFAULT_BODY_SIZE_LIMIT,
+            ),
             &[],
             &my_no_sql_abstractions::DataSynchronizationPeriod::Immediately,
         )
@@ -2450,7 +2469,10 @@ mod tests {
         assert!(result.is_all_deleted());
 
         let result = super::bulk_delete_if_rows::<TimeStampedTestEntity>(
-            flurl::FlUrl::new("http://127.0.0.1:0"),
+            super::WriterFlUrl::new(
+                flurl::FlUrl::new("http://127.0.0.1:0"),
+                crate::DEFAULT_BODY_SIZE_LIMIT,
+            ),
             &[],
             &my_no_sql_abstractions::DataSynchronizationPeriod::Immediately,
         )

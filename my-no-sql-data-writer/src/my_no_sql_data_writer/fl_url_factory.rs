@@ -7,11 +7,11 @@ use flurl::FlUrl;
 
 use my_no_sql_abstractions::{parse_connection_string, ConnectionString};
 
-use super::{CreateTableParams, DataWriterError, MyNoSqlWriterSettings};
+use super::{CreateTableParams, DataWriterError, MyNoSqlWriterSettings, WriterFlUrl};
 
 /// The largest answer a writer reads, in bytes, unless it is given another limit by
-/// `set_body_size_limit`: 100 MB, the same as the default of FlUrl. The writer hands its limit to
-/// every request it makes, so the limit set on the writer is the one which counts.
+/// `set_body_size_limit`: 100 MB. FlUrl takes the limit where the body of an answer is read: every
+/// request of the writer carries it there - see [`WriterFlUrl`].
 pub const DEFAULT_BODY_SIZE_LIMIT: usize = 100 * 1024 * 1024;
 
 #[derive(Clone)]
@@ -79,7 +79,7 @@ impl FlUrlFactory {
     fn create_fl_url(
         &self,
         connection_string: &ConnectionString,
-    ) -> Result<FlUrl, DataWriterError> {
+    ) -> Result<WriterFlUrl, DataWriterError> {
         let fl_url = FlUrl::new(connection_string.host.as_str());
 
         if let Some(err) = fl_url.get_error() {
@@ -94,7 +94,6 @@ impl FlUrlFactory {
         // alike) to a single writer.
         let mut fl_url = fl_url
             .update_mode(self.mode)
-            .set_max_response_body_size(self.body_size_limit)
             .with_header("session", super::get_writer_session_id());
 
         // Nothing is sent when the connection works with the default namespace - which is what
@@ -105,14 +104,14 @@ impl FlUrlFactory {
 
         #[cfg(all(unix, feature = "with-ssh"))]
         if let Some(ssh_security_credentials_resolver) = &self.ssh_security_credentials_resolver {
-            return Ok(fl_url
-                .set_ssh_security_credentials_resolver(ssh_security_credentials_resolver.clone()));
+            fl_url = fl_url
+                .set_ssh_security_credentials_resolver(ssh_security_credentials_resolver.clone());
         }
 
-        Ok(fl_url)
+        Ok(WriterFlUrl::new(fl_url, self.body_size_limit))
     }
 
-    pub async fn get_fl_url(&self) -> Result<(FlUrl, String), DataWriterError> {
+    pub async fn get_fl_url(&self) -> Result<(WriterFlUrl, String), DataWriterError> {
         let connection_string = parse_connection_string(self.settings.get_url().await.as_str())?;
 
         if !self.create_table_is_called.load(Ordering::Relaxed) {
@@ -141,7 +140,7 @@ impl FlUrlFactory {
     /// in front of them would create it with the auto-create parameters instead of theirs.
     pub async fn get_fl_url_without_auto_create_table(
         &self,
-    ) -> Result<(FlUrl, String), DataWriterError> {
+    ) -> Result<(WriterFlUrl, String), DataWriterError> {
         let connection_string = parse_connection_string(self.settings.get_url().await.as_str())?;
 
         let result = self.create_fl_url(&connection_string)?;
