@@ -20,7 +20,7 @@ tokio = { version = "*", features = ["full"] }
 serde_json = { version = "*" }
 serde = { version = "*", features = ["derive"] }
 # Per-table in-memory row compression (master-node only): without `master-node` this crate
-# does not depend on flate2 (a TCP reader still gets it through my-no-sql-tcp-shared).
+# does not depend on flate2.
 # Pure-Rust zlib-rs backend: no C toolchain needed to build.
 flate2 = { version = "*", optional = true, default-features = false, features = [
     "zlib-rs",

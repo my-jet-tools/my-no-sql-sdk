@@ -11,12 +11,18 @@ data-writer = ["dep:my-no-sql-data-writer"]
 macros = ["dep:my-no-sql-macros", "dep:rust-extensions"]
 data-reader = ["dep:my-no-sql-tcp-reader"]
 tcp-contracts = ["dep:my-no-sql-tcp-shared"]
+# The server compresses what it sends to a node with zstd (see
+# `my_no_sql_tcp_shared::payload_compressor`). zstd is a C library, so only the infrastructure
+# roles - the server and the node - get the codec; a service built with `data-reader` /
+# `data-writer` builds without a C toolchain. `?` - the codec is turned on only when
+# `tcp-contracts` brings the crate in.
 master-node = [
     "my-no-sql-core/master-node",
     "my-no-sql-server-core/master-node",
+    "my-no-sql-tcp-shared?/zstd",
 ]
 
-read-node = ["my-no-sql-server-core"]
+read-node = ["my-no-sql-server-core", "my-no-sql-tcp-shared?/zstd"]
 
 debug_db_row = ["my-no-sql-core/debug_db_row"]
 with-ssh = ["my-no-sql-data-writer?/with-ssh"]

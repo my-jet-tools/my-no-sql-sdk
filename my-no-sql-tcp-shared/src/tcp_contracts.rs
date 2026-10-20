@@ -4,7 +4,16 @@ use my_tcp_sockets::{
 };
 use rust_extensions::date_time::DateTimeAsMicroseconds;
 
-use crate::{tcp_packets::*, DeleteRowTcpContract};
+use crate::{tcp_packets::*, DeleteRowTcpContract, TcpCompression};
+
+/// Version of the `GreetingFromNode` packet this SDK writes:
+/// `[GREETING_FROM_NODE][2][node_location][node_version][compression]`.
+///
+/// - `0` - no compression field;
+/// - `1` - a bool which asked for DEFLATE. DEFLATE is gone, so such a node gets its data
+///   uncompressed - and reads it;
+/// - `2` - the number of a [`TcpCompression`].
+const GREETING_FROM_NODE_VERSION: u8 = 2;
 
 #[derive(Debug)]
 pub enum MyNoSqlTcpContract {
@@ -40,7 +49,7 @@ pub enum MyNoSqlTcpContract {
     GreetingFromNode {
         node_location: String,
         node_version: String,
-        compress: bool,
+        compression: TcpCompression,
     },
     SubscribeAsNode(String),
     Unsubscribe(String),
@@ -93,9 +102,17 @@ pub enum MyNoSqlTcpContract {
 }
 
 impl MyNoSqlTcpContract {
-    pub fn compress_if_make_since(self) -> Self {
+    /// Wraps the packet into a `CompressedPayload` made with `compression` - if the result is
+    /// smaller. `TcpCompression::None` gives the packet back as it is.
+    #[cfg(feature = "zstd")]
+    pub fn compress_if_makes_sense(self, compression: TcpCompression) -> Self {
         if let Self::CompressedPayload(_) = self {
             panic!("You can not get compress payload from compressed payload");
+        }
+
+        match compression {
+            TcpCompression::None => return self,
+            TcpCompression::Zstd => {}
         }
 
         let mut non_compressed = Vec::new();
@@ -113,8 +130,8 @@ impl MyNoSqlTcpContract {
 
     pub async fn decompress_if_compressed(self) -> Result<Self, ReadingTcpContractFail> {
         if let Self::CompressedPayload(payload) = self {
-            let uncompressed_payload =
-                super::payload_compressor::decompress(payload.as_slice()).unwrap();
+            // A broken payload breaks the connection instead of panicking the read loop
+            let uncompressed_payload = super::payload_compressor::decompress(payload.as_slice())?;
 
             let mut reader = SocketReaderInMem::new(uncompressed_payload);
 
@@ -198,21 +215,29 @@ impl MyNoSqlTcpContract {
             GREETING_FROM_NODE => {
                 let packet_version = socket_reader.read_byte().await?;
 
-                let mut compress = false;
                 let node_location =
                     crate::common_deserializes::read_pascal_string(socket_reader).await?;
 
                 let node_version =
                     crate::common_deserializes::read_pascal_string(socket_reader).await?;
 
-                if packet_version > 0 {
-                    compress = socket_reader.read_bool().await?;
-                }
+                let compression = match packet_version {
+                    0 => TcpCompression::None,
+                    1 => {
+                        // The node asked for DEFLATE, which is gone - it gets its data uncompressed
+                        socket_reader.read_bool().await?;
+                        TcpCompression::None
+                    }
+                    // A number this SDK does not know gives none as well: a node always reads
+                    // an uncompressed packet
+                    _ => TcpCompression::from_u8(socket_reader.read_byte().await?)
+                        .unwrap_or(TcpCompression::None),
+                };
 
                 Ok(Self::GreetingFromNode {
                     node_location,
                     node_version,
-                    compress,
+                    compression,
                 })
             }
             SUBSCRIBE_AS_NODE => {
@@ -401,20 +426,13 @@ impl MyNoSqlTcpContract {
             Self::GreetingFromNode {
                 node_location,
                 node_version,
-                compress,
+                compression,
             } => {
-                if *compress {
-                    write_buffer.write_byte(GREETING_FROM_NODE);
-                    write_buffer.write_byte(1);
-                    write_buffer.write_pascal_string(node_location);
-                    write_buffer.write_pascal_string(node_version);
-                    write_buffer.write_byte(1);
-                } else {
-                    write_buffer.write_byte(GREETING_FROM_NODE);
-                    write_buffer.write_byte(0);
-                    write_buffer.write_pascal_string(node_location);
-                    write_buffer.write_pascal_string(node_version);
-                }
+                write_buffer.write_byte(GREETING_FROM_NODE);
+                write_buffer.write_byte(GREETING_FROM_NODE_VERSION);
+                write_buffer.write_pascal_string(node_location);
+                write_buffer.write_pascal_string(node_version);
+                write_buffer.write_byte(compression.as_u8());
             }
 
             Self::SubscribeAsNode(table_name) => {
@@ -556,10 +574,11 @@ impl TcpSerializerState<MyNoSqlTcpContract> for () {
 mod test {
     use my_tcp_sockets::socket_reader::SocketReaderInMem;
 
-    use my_tcp_sockets::TcpContract;
+    use my_tcp_sockets::{TcpContract, TcpWriteBuffer};
 
-    use super::MyNoSqlTcpContract;
-    use crate::tcp_packets::{PING_WITH_LATENCY, SET_NAMESPACE};
+    use super::{MyNoSqlTcpContract, GREETING_FROM_NODE_VERSION};
+    use crate::tcp_packets::{GREETING_FROM_NODE, PING_WITH_LATENCY, SET_NAMESPACE};
+    use crate::TcpCompression;
 
     #[tokio::test]
     async fn test_set_namespace_serialize_deserialize() {
@@ -608,5 +627,168 @@ mod test {
             MyNoSqlTcpContract::PingWithLatency { micros } => assert_eq!(1_234_567, micros),
             _ => panic!("Unexpected contract: {:?}", result),
         }
+    }
+
+    /// Reads a `GreetingFromNode` and the `Ping` which follows it - the `Ping` is read only if
+    /// the greeting was read up to its last byte.
+    async fn read_greeting_then_ping(buffer: Vec<u8>) -> TcpCompression {
+        let mut socket_reader = SocketReaderInMem::new(buffer);
+
+        let result = MyNoSqlTcpContract::deserialize(&mut socket_reader)
+            .await
+            .unwrap();
+
+        let compression = match result {
+            MyNoSqlTcpContract::GreetingFromNode {
+                node_location,
+                node_version,
+                compression,
+            } => {
+                assert_eq!("eu-west", node_location);
+                assert_eq!("1.2.3", node_version);
+                compression
+            }
+            _ => panic!("Unexpected contract: {:?}", result),
+        };
+
+        let result = MyNoSqlTcpContract::deserialize(&mut socket_reader)
+            .await
+            .unwrap();
+
+        match result {
+            MyNoSqlTcpContract::Ping => {}
+            _ => panic!("Unexpected contract: {:?}", result),
+        }
+
+        compression
+    }
+
+    /// A greeting written by hand, the way a node of another version writes it.
+    fn greeting_from_node_of_version(packet_version: u8, tail: Option<u8>) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        buffer.write_byte(GREETING_FROM_NODE);
+        buffer.write_byte(packet_version);
+        buffer.write_pascal_string("eu-west");
+        buffer.write_pascal_string("1.2.3");
+
+        if let Some(tail) = tail {
+            buffer.write_byte(tail);
+        }
+
+        MyNoSqlTcpContract::Ping.serialize(&mut buffer);
+
+        buffer
+    }
+
+    #[tokio::test]
+    async fn test_greeting_from_node_serialize_deserialize() {
+        for compression in [TcpCompression::None, TcpCompression::Zstd] {
+            let mut buffer = Vec::new();
+
+            MyNoSqlTcpContract::GreetingFromNode {
+                node_location: "eu-west".to_string(),
+                node_version: "1.2.3".to_string(),
+                compression,
+            }
+            .serialize(&mut buffer);
+
+            assert_eq!(GREETING_FROM_NODE, buffer[0]);
+            assert_eq!(2, GREETING_FROM_NODE_VERSION);
+            assert_eq!(GREETING_FROM_NODE_VERSION, buffer[1]);
+            assert_eq!(compression.as_u8(), *buffer.last().unwrap());
+
+            MyNoSqlTcpContract::Ping.serialize(&mut buffer);
+
+            assert_eq!(compression, read_greeting_then_ping(buffer).await);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_greeting_from_node_of_version_0_is_read_as_none() {
+        let buffer = greeting_from_node_of_version(0, None);
+        assert_eq!(TcpCompression::None, read_greeting_then_ping(buffer).await);
+    }
+
+    #[tokio::test]
+    async fn test_greeting_from_node_of_version_1_with_deflate_is_read_as_none() {
+        // A node of version 1 which asked for DEFLATE (`true`) gets its data uncompressed
+        let buffer = greeting_from_node_of_version(1, Some(1));
+        assert_eq!(TcpCompression::None, read_greeting_then_ping(buffer).await);
+    }
+
+    #[tokio::test]
+    async fn test_greeting_from_node_with_unknown_compression_is_read_as_none() {
+        let buffer = greeting_from_node_of_version(GREETING_FROM_NODE_VERSION, Some(200));
+        assert_eq!(TcpCompression::None, read_greeting_then_ping(buffer).await);
+    }
+
+    #[cfg(feature = "zstd")]
+    fn big_init_table() -> MyNoSqlTcpContract {
+        MyNoSqlTcpContract::InitTable {
+            table_name: "instruments".to_string(),
+            data: br#"[{"PartitionKey":"instruments","RowKey":"EURUSD","Value":15000.0}]"#
+                .repeat(1000),
+        }
+    }
+
+    #[cfg(feature = "zstd")]
+    fn assert_is_big_init_table(contract: MyNoSqlTcpContract) {
+        let expected = big_init_table();
+
+        match (contract, expected) {
+            (
+                MyNoSqlTcpContract::InitTable { table_name, data },
+                MyNoSqlTcpContract::InitTable {
+                    table_name: expected_table_name,
+                    data: expected_data,
+                },
+            ) => {
+                assert_eq!(expected_table_name, table_name);
+                assert_eq!(expected_data, data);
+            }
+            (contract, _) => panic!("Unexpected contract: {:?}", contract),
+        }
+    }
+
+    #[cfg(feature = "zstd")]
+    #[tokio::test]
+    async fn test_zstd_compressed_payload_round_trip() {
+        let compressed = big_init_table().compress_if_makes_sense(TcpCompression::Zstd);
+
+        match &compressed {
+            MyNoSqlTcpContract::CompressedPayload(_) => {}
+            _ => panic!("Unexpected contract: {:?}", compressed),
+        }
+
+        let mut buffer = Vec::new();
+        compressed.serialize(&mut buffer);
+
+        let mut socket_reader = SocketReaderInMem::new(buffer);
+
+        let result = MyNoSqlTcpContract::deserialize(&mut socket_reader)
+            .await
+            .unwrap()
+            .decompress_if_compressed()
+            .await
+            .unwrap();
+
+        assert_is_big_init_table(result);
+    }
+
+    #[cfg(feature = "zstd")]
+    #[test]
+    fn test_compress_with_none_keeps_the_packet() {
+        let result = big_init_table().compress_if_makes_sense(TcpCompression::None);
+        assert_is_big_init_table(result);
+    }
+
+    #[tokio::test]
+    async fn test_broken_compressed_payload_is_an_error_not_a_panic() {
+        let result = MyNoSqlTcpContract::CompressedPayload(vec![0xff, 0xff, 0xff, 0xff])
+            .decompress_if_compressed()
+            .await;
+
+        assert!(result.is_err());
     }
 }

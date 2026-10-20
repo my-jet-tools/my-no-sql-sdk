@@ -58,8 +58,8 @@ async-trait = "*" # the settings traits (MyNoSqlWriterSettings, MyNoSqlTcpConnec
 | `data-writer` | HTTP writer | `my_no_sql_sdk::data_writer` |
 | `data-reader` | TCP reader | `my_no_sql_sdk::reader` |
 | `tcp-contracts` | raw TCP contracts | `my_no_sql_sdk::tcp_contracts` |
-| `master-node` | server-side model + per-table row compression (DEFLATE via `flate2`) | `my_no_sql_sdk::server` |
-| `read-node` | server-side model for a read node | `my_no_sql_sdk::server` |
+| `master-node` | server-side model + per-table row compression (DEFLATE via `flate2`); with `tcp-contracts` — zstd for the server → node link (a C library) | `my_no_sql_sdk::server` |
+| `read-node` | server-side model for a read node; with `tcp-contracts` — zstd for the server → node link (a C library) | `my_no_sql_sdk::server` |
 | `with-ssh` | writer can reach the server through an SSH tunnel (needs `data-writer`; unix only) | — |
 | `with-ring-tls` | TLS for `https://` writer urls, `ring` crypto provider (needs `data-writer`) | — |
 | `with-rust-tls` | TLS for `https://` writer urls, pure-Rust crypto provider, x86_64/aarch64 only (needs `data-writer`) | — |
@@ -582,8 +582,8 @@ writers of that table the application has built.
 
 ### Size of an answer
 
-The writer reads answers of up to **100 MB** (`DEFAULT_BODY_SIZE_LIMIT`, the same as FlUrl's own default). A
-bigger answer fails the call with
+The writer reads answers of up to **100 MB** (`DEFAULT_BODY_SIZE_LIMIT`). FlUrl has no limit of its own - it
+takes one where the body is read, and the writer reads every body with its limit. A bigger answer fails the call with
 `DataWriterError::FlUrlError(FlUrlError::ResponseBodyTooLarge { limit })`. The limit is set on the builder or on
 the writer, and the `with_retries` wrappers made after that read with it; `usize::MAX` lifts it:
 
@@ -674,6 +674,26 @@ neither a reader nor a node does anything on its own.
 
 A server which predates the packet (`my-no-sql-sdk` < 0.5.1) drops the connection on it
 (`InvalidPacketId`), so **servers and nodes are upgraded before the readers** which ping them.
+
+### Compression of the node link
+
+Only what the server sends to a node is compressed. The node names the codec in its `GreetingFromNode` —
+`compression: TcpCompression`, sent as a number: `0` none, `1` zstd (the numbers of the my-reverse-proxy gateway
+handshake) — and the server sends every packet of that connection as a `CompressedPayload` made with it, when that
+is smaller: `compress_if_makes_sense(compression)`. The codec is zstd, level 3 — the codec and the level of the
+gateway, measured there for CPU and ratio. Ordinary readers do not declare compression and never get a
+`CompressedPayload`.
+
+zstd is a C library, so `my-no-sql-tcp-shared` has it behind its `zstd` feature, which `my-no-sql-sdk` turns on for
+`master-node` and `read-node` only (together with `tcp-contracts`). A service built with `data-reader` /
+`data-writer` needs no C toolchain. A `CompressedPayload` which can not be decompressed — broken, or received by a
+build without the codec — breaks the connection (`ReadingTcpContractFail::IoError`) instead of panicking.
+
+The greeting is written as version 2 of the packet. Version 0 (no field) and version 1 (a bool which asked for
+DEFLATE, which is gone) are read as none, and so is a number this SDK does not know: such a node gets its data
+uncompressed and reads it. A server which predates version 2 reads the `1` of zstd as the DEFLATE request of version
+1 and sends DEFLATE, which the node can not read — so **the server is upgraded before its nodes**, or together with
+them.
 
 ---
 
@@ -845,6 +865,9 @@ Not source compatible:
   — `partition_now` is the partition which is in the table, `partition_before` the one it has replaced. They
   were named the other way round.
 - `SyncToMainNodeQueue` got a private field: it is built through `SyncToMainNodeQueue::new()` only.
+- `MyNoSqlTcpContract::GreetingFromNode`: `compress: bool` is replaced by `compression: TcpCompression`.
+  `compress_if_make_since()` is replaced by `compress_if_makes_sense(compression)`, which exists only with the
+  `zstd` feature of `my-no-sql-tcp-shared` (`master-node` / `read-node`).
 
 ## Further reading
 

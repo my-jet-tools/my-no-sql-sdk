@@ -1,49 +1,43 @@
 //! Payload compression for the MyNoSql TCP protocol.
 //!
-//! A whole serialized [`crate::MyNoSqlTcpContract`] is compressed as one **raw DEFLATE**
-//! stream (RFC 1951 — no zlib/gzip header, no trailer) and carried in the
-//! `CompressedPayload` packet. Both sides of the wire must agree on this, so the server
-//! and every reader have to be built from the same version of this crate.
+//! Only the server → node link is compressed. A node names the codec in its
+//! `GreetingFromNode` ([`crate::TcpCompression`]), and the server sends every packet of that
+//! connection as a `CompressedPayload`: one whole serialized [`crate::MyNoSqlTcpContract`]
+//! compressed as a single zstd frame. Ordinary readers do not declare compression and never
+//! get a `CompressedPayload`.
 //!
-//! Historically this was a ZIP container holding a single entry named `"d"`. The
-//! compressed bytes are the same DEFLATE stream ZIP stored inside, minus the container:
-//! the local header + central directory cost ~100 bytes per packet, which on small
-//! updates made the "compressed" payload *larger* than the original. Raw DEFLATE keeps
-//! the compression ratio identical on big snapshots and drops that fixed overhead.
+//! The codec and the level - zstd, level 3 - are the ones of the my-reverse-proxy gateway
+//! handshake, where they were measured for CPU and ratio.
+//!
+//! zstd is a C library, so the codec sits behind the `zstd` feature of this crate. The SDK
+//! enables it for the infrastructure roles only - `master-node` and `read-node`; a service
+//! built with `data-reader` / `data-writer` does not need a C toolchain. Built without the
+//! feature, [`decompress`] answers every payload with an error, and the connection breaks.
 
-use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
-use std::io::{Read, Write};
+#[cfg(feature = "zstd")]
+const ZSTD_LEVEL: i32 = 3;
 
-/// DEFLATE level used for the wire payload. 6 is what the previous ZIP-based
-/// implementation used, and the best ratio/throughput trade-off for JSON row payloads:
-/// on a 3.9 MB snapshot level 9 buys 0.35 percentage points of ratio for 2.2x the CPU.
-const DEFLATE_LEVEL: u32 = 6;
-
-/// Compresses a serialized packet into a raw DEFLATE stream.
+/// Compresses a serialized packet into a zstd frame.
+#[cfg(feature = "zstd")]
 pub fn compress(payload: &[u8]) -> Result<Vec<u8>, std::io::Error> {
-    // JSON rows compress to roughly an eighth; a quarter is a safe starting capacity.
-    let mut encoder = DeflateEncoder::new(
-        Vec::with_capacity(payload.len() / 4 + 64),
-        Compression::new(DEFLATE_LEVEL),
-    );
-
-    encoder.write_all(payload)?;
-
-    encoder.finish()
+    zstd::stream::encode_all(payload, ZSTD_LEVEL)
 }
 
-/// Inflates a payload produced by [`compress`].
+/// Decompresses a payload produced by [`compress`].
+#[cfg(feature = "zstd")]
 pub fn decompress(payload: &[u8]) -> Result<Vec<u8>, std::io::Error> {
-    let mut decoder = DeflateDecoder::new(payload);
-
-    let mut result = Vec::with_capacity(payload.len() * 4);
-
-    decoder.read_to_end(&mut result)?;
-
-    Ok(result)
+    zstd::stream::decode_all(payload)
 }
 
-#[cfg(test)]
+#[cfg(not(feature = "zstd"))]
+pub fn decompress(_payload: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Got a CompressedPayload, but my-no-sql-tcp-shared is built without the `zstd` feature",
+    ))
+}
+
+#[cfg(all(test, feature = "zstd"))]
 mod tests {
     #[test]
     fn round_trip() {

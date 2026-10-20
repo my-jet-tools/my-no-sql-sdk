@@ -22,8 +22,8 @@ and the version is bumped and tagged. The spec + API contract below is what matt
 
 - **`Cargo.toml`** — `flate2` (`default-features = false`, feature `zlib-rs`) added as an **optional**
   dep, enabled only by `master-node` (`master-node = ["dep:flate2"]`). Built without master-node,
-  `my-no-sql-core` does **not** pull `flate2` (TCP readers still get `flate2` through
-  `my-no-sql-tcp-shared`, which uses it for wire payload compression).
+  `my-no-sql-core` does **not** pull `flate2`. The TCP protocol does not use `flate2` either: the
+  server → node link is compressed with zstd (`my-no-sql-tcp-shared`, feature `zstd`).
 
 - **`src/db/db_table/db_table_attributes.rs`**
   - new field `pub compressed: bool`
