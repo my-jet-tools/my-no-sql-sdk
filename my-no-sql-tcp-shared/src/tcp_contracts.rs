@@ -2,7 +2,9 @@ use my_tcp_sockets::{
     socket_reader::{ReadingTcpContractFail, SocketReader, SocketReaderInMem},
     TcpSerializerState, TcpWriteBuffer,
 };
-use rust_extensions::date_time::DateTimeAsMicroseconds;
+use rust_extensions::{
+    date_time::DateTimeAsMicroseconds, ParseUInt32VariableSizeResult, UInt32VariableSize,
+};
 
 use crate::{tcp_packets::*, DeleteRowTcpContract, TcpCompression};
 
@@ -14,6 +16,11 @@ use crate::{tcp_packets::*, DeleteRowTcpContract, TcpCompression};
 ///   uncompressed - and reads it;
 /// - `2` - the number of a [`TcpCompression`].
 const GREETING_FROM_NODE_VERSION: u8 = 2;
+
+/// A `CompressedPayload` is shorter than this: its length goes as a `UInt32VariableSize`,
+/// which takes values below 1_073_741_823.
+#[cfg(feature = "zstd")]
+const COMPRESSED_PAYLOAD_LEN_LIMIT: usize = 1_073_741_823;
 
 #[derive(Debug)]
 pub enum MyNoSqlTcpContract {
@@ -54,6 +61,8 @@ pub enum MyNoSqlTcpContract {
     SubscribeAsNode(String),
     Unsubscribe(String),
     TableNotFound(String),
+    /// On the wire: `[COMPRESSED_PAYLOAD][length as UInt32VariableSize][payload]` - 1 byte of
+    /// length up to 63, 2 bytes up to 16 383, 3 bytes up to ~4 MB, 4 bytes up to ~1 GB.
     CompressedPayload(Vec<u8>),
     UpdatePartitionsLastReadTime {
         confirmation_id: i64,
@@ -121,7 +130,10 @@ impl MyNoSqlTcpContract {
 
         let compressed = super::payload_compressor::compress(non_compressed.as_slice()).unwrap();
 
-        if compressed.len() + 10 < non_compressed.as_slice().len() {
+        // A length of 1 GB and more does not fit into the packet - such a packet goes uncompressed
+        if compressed.len() < COMPRESSED_PAYLOAD_LEN_LIMIT
+            && compressed.len() + 10 < non_compressed.as_slice().len()
+        {
             Self::CompressedPayload(compressed)
         } else {
             self
@@ -262,7 +274,22 @@ impl MyNoSqlTcpContract {
                 Ok(Self::Unsubscribe(table_name))
             }
             COMPRESSED_PAYLOAD => {
-                let data = socket_reader.read_byte_array().await?;
+                let mut len_buf = [0u8; 4];
+                len_buf[0] = socket_reader.read_byte().await?;
+
+                // The first byte tells how many bytes the length takes
+                let len = match UInt32VariableSize::from_slice(&len_buf[..1]) {
+                    ParseUInt32VariableSizeResult::Ok { value, .. } => value.get_value(),
+                    ParseUInt32VariableSizeResult::NotEnoughDataInBuffer(size) => {
+                        socket_reader.read_buf(&mut len_buf[1..size]).await?;
+                        UInt32VariableSize::from_slice(&len_buf[..size])
+                            .unwrap()
+                            .get_value()
+                    }
+                };
+
+                let mut data = vec![0u8; len as usize];
+                socket_reader.read_buf(&mut data).await?;
                 Ok(Self::CompressedPayload(data))
             }
             UPDATE_PARTITIONS_LAST_READ_TIME => {
@@ -457,7 +484,10 @@ impl MyNoSqlTcpContract {
             }
             Self::CompressedPayload(payload) => {
                 write_buffer.write_byte(COMPRESSED_PAYLOAD);
-                write_buffer.write_byte_array(payload.as_slice());
+                let mut len = Vec::with_capacity(4);
+                UInt32VariableSize::new(payload.len() as u32).serialize(&mut len);
+                write_buffer.write_slice(&len);
+                write_buffer.write_slice(payload);
             }
             Self::UpdatePartitionsLastReadTime {
                 table_name,
@@ -577,7 +607,9 @@ mod test {
     use my_tcp_sockets::{TcpContract, TcpWriteBuffer};
 
     use super::{MyNoSqlTcpContract, GREETING_FROM_NODE_VERSION};
-    use crate::tcp_packets::{GREETING_FROM_NODE, PING_WITH_LATENCY, SET_NAMESPACE};
+    use crate::tcp_packets::{
+        COMPRESSED_PAYLOAD, GREETING_FROM_NODE, PING_WITH_LATENCY, SET_NAMESPACE,
+    };
     use crate::TcpCompression;
 
     #[tokio::test]
@@ -721,6 +753,54 @@ mod test {
     async fn test_greeting_from_node_with_unknown_compression_is_read_as_none() {
         let buffer = greeting_from_node_of_version(GREETING_FROM_NODE_VERSION, Some(200));
         assert_eq!(TcpCompression::None, read_greeting_then_ping(buffer).await);
+    }
+
+    #[tokio::test]
+    async fn test_compressed_payload_length_is_a_uint32_variable_size() {
+        // (payload length, bytes of the length) on the borders of UInt32VariableSize
+        for (payload_len, len_size) in [
+            (0, 1),
+            (63, 1),
+            (64, 2),
+            (16_383, 2),
+            (16_384, 3),
+            (4_194_302, 3),
+            (4_194_303, 4),
+        ] {
+            let payload: Vec<u8> = (0..payload_len).map(|i| i as u8).collect();
+
+            let mut buffer = Vec::new();
+
+            MyNoSqlTcpContract::CompressedPayload(payload.clone()).serialize(&mut buffer);
+
+            assert_eq!(COMPRESSED_PAYLOAD, buffer[0]);
+            assert_eq!(1 + len_size + payload_len, buffer.len(), "payload of {}", payload_len);
+
+            // The Ping is read only if the packet was read up to its last byte
+            MyNoSqlTcpContract::Ping.serialize(&mut buffer);
+
+            let mut socket_reader = SocketReaderInMem::new(buffer);
+
+            let result = MyNoSqlTcpContract::deserialize(&mut socket_reader)
+                .await
+                .unwrap();
+
+            match result {
+                MyNoSqlTcpContract::CompressedPayload(data) => {
+                    assert!(payload == data, "payload of {}", payload_len)
+                }
+                _ => panic!("Unexpected contract: {:?}", result),
+            }
+
+            let result = MyNoSqlTcpContract::deserialize(&mut socket_reader)
+                .await
+                .unwrap();
+
+            match result {
+                MyNoSqlTcpContract::Ping => {}
+                _ => panic!("Unexpected contract: {:?}", result),
+            }
+        }
     }
 
     #[cfg(feature = "zstd")]
