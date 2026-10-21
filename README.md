@@ -58,8 +58,8 @@ async-trait = "*" # the settings traits (MyNoSqlWriterSettings, MyNoSqlTcpConnec
 | `data-writer` | HTTP writer | `my_no_sql_sdk::data_writer` |
 | `data-reader` | TCP reader | `my_no_sql_sdk::reader` |
 | `tcp-contracts` | raw TCP contracts | `my_no_sql_sdk::tcp_contracts` |
-| `master-node` | server-side model + per-table row compression (DEFLATE via `flate2`); with `tcp-contracts` — zstd for the server → node link (a C library) | `my_no_sql_sdk::server` |
-| `read-node` | server-side model for a read node; with `tcp-contracts` — zstd for the server → node link (a C library) | `my_no_sql_sdk::server` |
+| `master-node` | server-side model + per-table row compression (DEFLATE via `flate2`); with `tcp-contracts` — LZ4 and Zstandard for the server → node link (C libraries) | `my_no_sql_sdk::server` |
+| `read-node` | server-side model for a read node; with `tcp-contracts` — LZ4 and Zstandard for the server → node link (C libraries) | `my_no_sql_sdk::server` |
 | `with-ssh` | writer can reach the server through an SSH tunnel (needs `data-writer`; unix only) | — |
 | `with-ring-tls` | TLS for `https://` writer urls, `ring` crypto provider (needs `data-writer`) | — |
 | `with-rust-tls` | TLS for `https://` writer urls, pure-Rust crypto provider, x86_64/aarch64 only (needs `data-writer`) | — |
@@ -675,25 +675,59 @@ neither a reader nor a node does anything on its own.
 A server which predates the packet (`my-no-sql-sdk` < 0.5.1) drops the connection on it
 (`InvalidPacketId`), so **servers and nodes are upgraded before the readers** which ping them.
 
-### Compression of the node link
+### Compression of the server → node link
 
-Only what the server sends to a node is compressed. The node names the codec in its `GreetingFromNode` —
-`compression: TcpCompression`, sent as a number: `0` none, `1` zstd (the numbers of the my-reverse-proxy gateway
-handshake) — and the server sends every packet of that connection as a `CompressedPayload` made with it, when that
-is smaller: `compress_if_makes_sense(compression)`. The codec is zstd, level 3 — the codec and the level of the
-gateway, measured there for CPU and ratio. Ordinary readers do not declare compression and never get a
-`CompressedPayload`.
+The server → node link is packed exactly as a gateway connection of
+[my-reverse-proxy](https://github.com/my-jet-tools/my-reverse-proxy) is: the same table of levels and the same code
+(`CompressionLevel`, `BatchPacker`, `BatchUnpacker` of `my-no-sql-tcp-shared`).
 
-zstd is a C library, so `my-no-sql-tcp-shared` has it behind its `zstd` feature, which `my-no-sql-sdk` turns on for
-`master-node` and `read-node` only (together with `tcp-contracts`). A service built with `data-reader` /
-`data-writer` needs no C toolchain. A `CompressedPayload` which can not be decompressed — broken, or received by a
-build without the codec — breaks the connection (`ReadingTcpContractFail::IoError`) instead of panicking.
+| `compress` | packed with |
+|---|---|
+| `0` | nothing — the default |
+| `1` | LZ4 |
+| `2` / `3` / `4` / `5` | Zstandard 1 / 3 / 6 / 9, every packet on its own |
+| `6` / `7` / `8` / `9` | Zstandard 1 / 3 / 6 / 9, one stream for the connection |
 
-The greeting is written as version 2 of the packet. Version 0 (no field) and version 1 (a bool which asked for
-DEFLATE, which is gone) are read as none, and so is a number this SDK does not know: such a node gets its data
-uncompressed and reads it. A server which predates version 2 reads the `1` of zstd as the DEFLATE request of version
-1 and sends DEFLATE, which the node can not read — so **the server is upgraded before its nodes**, or together with
-them.
+What a level gives on JSON — measured on the gateway: a release build on an Apple M4, data in batches of 256 KiB.
+Smaller is bytes of the data for a byte on the wire, speed is MiB/s of the data with nothing but the processor in the
+way. *API rows* are rows of a JSON answer — the names repeat, the values do not; *JSON, repetitive* is the same few
+structures over and over.
+
+| `compress` | packed with | API rows: smaller | API rows: MiB/s | JSON, repetitive: smaller | JSON, repetitive: MiB/s |
+|---|---|---|---|---|---|
+| `0` | nothing | 1 | 5 060 | 1 | 5 060 |
+| `1` | LZ4 | 2.30 | 965 | 12.35 | 2 660 |
+| `2` | Zstandard 1 | 4.14 | 660 | 21.85 | 2 240 |
+| `3` | Zstandard 3 | 3.94 | 515 | 21.50 | 2 200 |
+| `4` | Zstandard 6 | 4.10 | 170 | 23.68 | 745 |
+| `5` | Zstandard 9 | 4.30 | 125 | 24.17 | 610 |
+| `6` | Zstandard 1, one stream | 4.16 | 725 | 23.02 | 2 100 |
+| `7` | Zstandard 3, one stream | 3.88 | 390 | 21.44 | 1 250 |
+| `8` | Zstandard 6, one stream | 4.02 | 140 | 23.91 | 590 |
+| `9` | Zstandard 9, one stream | 4.22 | 80 | 24.02 | 460 |
+
+All the measurements — other data, what gets through a link of a given speed, which level to choose — are in
+[docs/gateway-compression.md](https://github.com/my-jet-tools/my-reverse-proxy/blob/main/docs/gateway-compression.md)
+of my-reverse-proxy.
+
+- The node chooses the level — `Compress` in its settings — and says it in its `GreetingFromNode`
+  (`compress: u8`). The server checks it with `CompressionLevel::new`: a level it has no row for is refused.
+- Only what the server sends to a node is packed. The server makes one `BatchPacker::new(level)` for the connection
+  and sends every packet through `packet.pack(&mut packer)`: `Some(CompressedPayload)` goes instead of the packet,
+  `None` means the packet goes as it is — it is too small (under 64 bytes for LZ4, 128 for Zstandard, 32 for a
+  stream), or packing saves nothing. At `6` to `9` a packet is packed with the packets sent before it, so every
+  `Some` is sent, in the order it was made. Ordinary readers send no `GreetingFromNode` and never get a
+  `CompressedPayload`.
+- The node unpacks in `MyNoSqlReaderTcpSerializer`, which is one per connection, and so is its stream. A
+  `CompressedPayload` which does not unpack, or the packet in which can not be read, breaks the connection
+  (`ReadingTcpContractFail::IoError`, `InvalidData`); the node connects again, and the new connection starts a new
+  stream.
+- LZ4 and Zstandard are C libraries: they are behind the `compression` feature of `my-no-sql-tcp-shared`, which
+  `my-no-sql-sdk` turns on for `master-node` and `read-node` (together with `tcp-contracts`). A service built with
+  `data-reader` / `data-writer` needs no C toolchain. A build without the feature answers a `CompressedPayload` with
+  the same error.
+- **The server and the node are built from one commit of the SDK.** The table and the packing have to be the same
+  on both ends, and nothing is kept for a server or a node of another build.
 
 ---
 
@@ -865,9 +899,11 @@ Not source compatible:
   — `partition_now` is the partition which is in the table, `partition_before` the one it has replaced. They
   were named the other way round.
 - `SyncToMainNodeQueue` got a private field: it is built through `SyncToMainNodeQueue::new()` only.
-- `MyNoSqlTcpContract::GreetingFromNode`: `compress: bool` is replaced by `compression: TcpCompression`.
-  `compress_if_make_since()` is replaced by `compress_if_makes_sense(compression)`, which exists only with the
-  `zstd` feature of `my-no-sql-tcp-shared` (`master-node` / `read-node`).
+- `MyNoSqlTcpContract::GreetingFromNode`: `compress: bool` is replaced by `compress: u8`, the compression level
+  (`0` to `9`, see "Compression of the server → node link"). `compress_if_make_since()` is replaced by
+  `pack(&mut BatchPacker)`, which exists only with the `compression` feature of `my-no-sql-tcp-shared`
+  (`master-node` / `read-node`). `MyNoSqlReaderTcpSerializer` is no longer a unit struct: it is built with
+  `MyNoSqlReaderTcpSerializer::new()`.
 
 ## Further reading
 

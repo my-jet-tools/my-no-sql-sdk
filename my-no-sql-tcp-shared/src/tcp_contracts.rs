@@ -1,26 +1,42 @@
 use my_tcp_sockets::{
-    socket_reader::{ReadingTcpContractFail, SocketReader, SocketReaderInMem},
+    socket_reader::{ReadingTcpContractFail, SocketReader},
     TcpSerializerState, TcpWriteBuffer,
 };
 use rust_extensions::{
     date_time::DateTimeAsMicroseconds, ParseUInt32VariableSizeResult, UInt32VariableSize,
 };
 
-use crate::{tcp_packets::*, DeleteRowTcpContract, TcpCompression};
+use crate::{tcp_packets::*, DeleteRowTcpContract};
+#[cfg(feature = "compression")]
+use crate::{BatchPacker, BATCH_STORED};
 
 /// Version of the `GreetingFromNode` packet this SDK writes:
-/// `[GREETING_FROM_NODE][2][node_location][node_version][compression]`.
+/// `[GREETING_FROM_NODE][2][node_location][node_version][compress]`.
 ///
-/// - `0` - no compression field;
-/// - `1` - a bool which asked for DEFLATE. DEFLATE is gone, so such a node gets its data
-///   uncompressed - and reads it;
-/// - `2` - the number of a [`TcpCompression`].
+/// Version `0` has no `compress`, and is read as `0` - no compression. In every other version
+/// the byte of the level follows.
 const GREETING_FROM_NODE_VERSION: u8 = 2;
 
 /// A `CompressedPayload` is shorter than this: its length goes as a `UInt32VariableSize`,
 /// which takes values below 1_073_741_823.
-#[cfg(feature = "zstd")]
+#[cfg(feature = "compression")]
 const COMPRESSED_PAYLOAD_LEN_LIMIT: usize = 1_073_741_823;
+
+/// The most the batch of a `CompressedPayload` unpacks to: as much as the length of a
+/// `CompressedPayload` can say. In MyNoSql a batch is one packet, and an `InitTable` is the
+/// snapshot of a whole table.
+#[cfg(feature = "compression")]
+pub const MAX_DECOMPRESSED_BATCH_SIZE: usize = 1_073_741_823;
+
+/// The biggest batch `BatchPacker::write_batch` makes of `len` bytes. One which goes as it is
+/// is the bytes and a byte. A piece of a stream - the levels 6 to 9 - can be bigger than that:
+/// the bytes go into the stream whether they pack or not, at 3 bytes for every 128 KiB of what
+/// does not, and the packer gives a piece the room of `compress_bound` of them and 64 bytes
+/// for the flush, after the kind and the size.
+#[cfg(feature = "compression")]
+fn max_batch_len(len: usize) -> usize {
+    1 + 4 + zstd::zstd_safe::compress_bound(len) + 64
+}
 
 #[derive(Debug)]
 pub enum MyNoSqlTcpContract {
@@ -56,12 +72,19 @@ pub enum MyNoSqlTcpContract {
     GreetingFromNode {
         node_location: String,
         node_version: String,
-        compression: TcpCompression,
+        /// The compression level the server is to pack what it sends to the node with: a number
+        /// of `CompressionLevel`, as it is in the settings of the node. The server checks it
+        /// with `CompressionLevel::new`.
+        compress: u8,
     },
     SubscribeAsNode(String),
     Unsubscribe(String),
     TableNotFound(String),
-    /// On the wire: `[COMPRESSED_PAYLOAD][length as UInt32VariableSize][payload]` - 1 byte of
+    /// A packet of the server to a node, packed: a batch of `BatchPacker` -
+    /// `[kind][u32 RAW_LEN][packed]` - made by `pack` and unpacked by
+    /// [`crate::MyNoSqlReaderTcpSerializer`].
+    ///
+    /// On the wire: `[COMPRESSED_PAYLOAD][length as UInt32VariableSize][batch]` - 1 byte of
     /// length up to 63, 2 bytes up to 16 383, 3 bytes up to ~4 MB, 4 bytes up to ~1 GB.
     CompressedPayload(Vec<u8>),
     UpdatePartitionsLastReadTime {
@@ -111,46 +134,37 @@ pub enum MyNoSqlTcpContract {
 }
 
 impl MyNoSqlTcpContract {
-    /// Wraps the packet into a `CompressedPayload` made with `compression` - if the result is
-    /// smaller. `TcpCompression::None` gives the packet back as it is.
-    #[cfg(feature = "zstd")]
-    pub fn compress_if_makes_sense(self, compression: TcpCompression) -> Self {
+    /// The packet as it is to be sent: `Some(CompressedPayload)` when the packer packed it,
+    /// `None` when it goes as it is - too small, or packing saves nothing.
+    ///
+    /// `packer` is the one of the connection. At the levels 6 to 9 a packet is packed with the
+    /// packets before it, and the node unpacks them in the order they were packed: every
+    /// `Some` is sent, and in the order it was made.
+    #[cfg(feature = "compression")]
+    pub fn pack(&self, packer: &mut BatchPacker) -> Option<Self> {
         if let Self::CompressedPayload(_) = self {
-            panic!("You can not get compress payload from compressed payload");
+            return None;
         }
 
-        match compression {
-            TcpCompression::None => return self,
-            TcpCompression::Zstd => {}
+        let mut bytes = Vec::new();
+        self.serialize(&mut bytes);
+
+        // Before the packer sees the packet: at the levels 6 to 9 it is in the stream once it
+        // is packed, and a batch which is not sent would leave the stream of the node behind
+        // the one of the server.
+        if max_batch_len(bytes.len()) >= COMPRESSED_PAYLOAD_LEN_LIMIT {
+            return None;
         }
 
-        let mut non_compressed = Vec::new();
+        let mut wire = Vec::new();
+        packer.write_batch(&bytes, &mut wire);
 
-        self.serialize(&mut non_compressed);
-
-        let compressed = super::payload_compressor::compress(non_compressed.as_slice()).unwrap();
-
-        // A length of 1 GB and more does not fit into the packet - such a packet goes uncompressed
-        if compressed.len() < COMPRESSED_PAYLOAD_LEN_LIMIT
-            && compressed.len() + 10 < non_compressed.as_slice().len()
-        {
-            Self::CompressedPayload(compressed)
-        } else {
-            self
+        // Not packed: the packet goes as it is, and is no part of the stream.
+        if wire[0] == BATCH_STORED {
+            return None;
         }
-    }
 
-    pub async fn decompress_if_compressed(self) -> Result<Self, ReadingTcpContractFail> {
-        if let Self::CompressedPayload(payload) = self {
-            // A broken payload breaks the connection instead of panicking the read loop
-            let uncompressed_payload = super::payload_compressor::decompress(payload.as_slice())?;
-
-            let mut reader = SocketReaderInMem::new(uncompressed_payload);
-
-            Self::deserialize(&mut reader).await
-        } else {
-            Ok(self)
-        }
+        Some(Self::CompressedPayload(wire))
     }
 
     pub async fn deserialize<TSocketReader: SocketReader + Send + Sync + 'static>(
@@ -233,23 +247,16 @@ impl MyNoSqlTcpContract {
                 let node_version =
                     crate::common_deserializes::read_pascal_string(socket_reader).await?;
 
-                let compression = match packet_version {
-                    0 => TcpCompression::None,
-                    1 => {
-                        // The node asked for DEFLATE, which is gone - it gets its data uncompressed
-                        socket_reader.read_bool().await?;
-                        TcpCompression::None
-                    }
-                    // A number this SDK does not know gives none as well: a node always reads
-                    // an uncompressed packet
-                    _ => TcpCompression::from_u8(socket_reader.read_byte().await?)
-                        .unwrap_or(TcpCompression::None),
+                // Version 0 has no level: no compression
+                let compress = match packet_version {
+                    0 => 0,
+                    _ => socket_reader.read_byte().await?,
                 };
 
                 Ok(Self::GreetingFromNode {
                     node_location,
                     node_version,
-                    compression,
+                    compress,
                 })
             }
             SUBSCRIBE_AS_NODE => {
@@ -453,13 +460,13 @@ impl MyNoSqlTcpContract {
             Self::GreetingFromNode {
                 node_location,
                 node_version,
-                compression,
+                compress,
             } => {
                 write_buffer.write_byte(GREETING_FROM_NODE);
                 write_buffer.write_byte(GREETING_FROM_NODE_VERSION);
                 write_buffer.write_pascal_string(node_location);
                 write_buffer.write_pascal_string(node_version);
-                write_buffer.write_byte(compression.as_u8());
+                write_buffer.write_byte(*compress);
             }
 
             Self::SubscribeAsNode(table_name) => {
@@ -610,7 +617,9 @@ mod test {
     use crate::tcp_packets::{
         COMPRESSED_PAYLOAD, GREETING_FROM_NODE, PING_WITH_LATENCY, SET_NAMESPACE,
     };
-    use crate::TcpCompression;
+    use crate::CompressionLevel;
+    #[cfg(feature = "compression")]
+    use crate::{BatchPacker, BatchUnpacker, Packing};
 
     #[tokio::test]
     async fn test_set_namespace_serialize_deserialize() {
@@ -663,22 +672,22 @@ mod test {
 
     /// Reads a `GreetingFromNode` and the `Ping` which follows it - the `Ping` is read only if
     /// the greeting was read up to its last byte.
-    async fn read_greeting_then_ping(buffer: Vec<u8>) -> TcpCompression {
+    async fn read_greeting_then_ping(buffer: Vec<u8>) -> u8 {
         let mut socket_reader = SocketReaderInMem::new(buffer);
 
         let result = MyNoSqlTcpContract::deserialize(&mut socket_reader)
             .await
             .unwrap();
 
-        let compression = match result {
+        let compress = match result {
             MyNoSqlTcpContract::GreetingFromNode {
                 node_location,
                 node_version,
-                compression,
+                compress,
             } => {
                 assert_eq!("eu-west", node_location);
                 assert_eq!("1.2.3", node_version);
-                compression
+                compress
             }
             _ => panic!("Unexpected contract: {:?}", result),
         };
@@ -692,7 +701,7 @@ mod test {
             _ => panic!("Unexpected contract: {:?}", result),
         }
 
-        compression
+        compress
     }
 
     /// A greeting written by hand, the way a node of another version writes it.
@@ -715,44 +724,44 @@ mod test {
 
     #[tokio::test]
     async fn test_greeting_from_node_serialize_deserialize() {
-        for compression in [TcpCompression::None, TcpCompression::Zstd] {
+        assert_eq!(9, CompressionLevel::MAX);
+
+        for compress in 0..=CompressionLevel::MAX {
             let mut buffer = Vec::new();
 
             MyNoSqlTcpContract::GreetingFromNode {
                 node_location: "eu-west".to_string(),
                 node_version: "1.2.3".to_string(),
-                compression,
+                compress,
             }
             .serialize(&mut buffer);
 
             assert_eq!(GREETING_FROM_NODE, buffer[0]);
             assert_eq!(2, GREETING_FROM_NODE_VERSION);
             assert_eq!(GREETING_FROM_NODE_VERSION, buffer[1]);
-            assert_eq!(compression.as_u8(), *buffer.last().unwrap());
+            assert_eq!(compress, *buffer.last().unwrap());
 
             MyNoSqlTcpContract::Ping.serialize(&mut buffer);
 
-            assert_eq!(compression, read_greeting_then_ping(buffer).await);
+            let read = read_greeting_then_ping(buffer).await;
+            assert_eq!(compress, read);
+            assert_eq!(compress, CompressionLevel::new(read).unwrap().as_u8());
         }
     }
 
     #[tokio::test]
-    async fn test_greeting_from_node_of_version_0_is_read_as_none() {
+    async fn test_greeting_from_node_of_version_0_is_read_as_no_compression() {
         let buffer = greeting_from_node_of_version(0, None);
-        assert_eq!(TcpCompression::None, read_greeting_then_ping(buffer).await);
+        assert_eq!(0, read_greeting_then_ping(buffer).await);
     }
 
+    /// The level is read as it is: the server refuses one it has no row for with
+    /// `CompressionLevel::new`.
     #[tokio::test]
-    async fn test_greeting_from_node_of_version_1_with_deflate_is_read_as_none() {
-        // A node of version 1 which asked for DEFLATE (`true`) gets its data uncompressed
-        let buffer = greeting_from_node_of_version(1, Some(1));
-        assert_eq!(TcpCompression::None, read_greeting_then_ping(buffer).await);
-    }
-
-    #[tokio::test]
-    async fn test_greeting_from_node_with_unknown_compression_is_read_as_none() {
+    async fn test_greeting_from_node_with_a_level_with_no_row_is_read_as_it_is() {
         let buffer = greeting_from_node_of_version(GREETING_FROM_NODE_VERSION, Some(200));
-        assert_eq!(TcpCompression::None, read_greeting_then_ping(buffer).await);
+        assert_eq!(200, read_greeting_then_ping(buffer).await);
+        assert!(CompressionLevel::new(200).is_err());
     }
 
     #[tokio::test]
@@ -803,7 +812,7 @@ mod test {
         }
     }
 
-    #[cfg(feature = "zstd")]
+    #[cfg(feature = "compression")]
     fn big_init_table() -> MyNoSqlTcpContract {
         MyNoSqlTcpContract::InitTable {
             table_name: "instruments".to_string(),
@@ -812,63 +821,99 @@ mod test {
         }
     }
 
-    #[cfg(feature = "zstd")]
-    fn assert_is_big_init_table(contract: MyNoSqlTcpContract) {
-        let expected = big_init_table();
-
-        match (contract, expected) {
-            (
-                MyNoSqlTcpContract::InitTable { table_name, data },
-                MyNoSqlTcpContract::InitTable {
-                    table_name: expected_table_name,
-                    data: expected_data,
-                },
-            ) => {
-                assert_eq!(expected_table_name, table_name);
-                assert_eq!(expected_data, data);
-            }
-            (contract, _) => panic!("Unexpected contract: {:?}", contract),
-        }
-    }
-
-    #[cfg(feature = "zstd")]
-    #[tokio::test]
-    async fn test_zstd_compressed_payload_round_trip() {
-        let compressed = big_init_table().compress_if_makes_sense(TcpCompression::Zstd);
-
-        match &compressed {
-            MyNoSqlTcpContract::CompressedPayload(_) => {}
-            _ => panic!("Unexpected contract: {:?}", compressed),
-        }
-
+    #[cfg(feature = "compression")]
+    fn serialized(contract: &MyNoSqlTcpContract) -> Vec<u8> {
         let mut buffer = Vec::new();
-        compressed.serialize(&mut buffer);
-
-        let mut socket_reader = SocketReaderInMem::new(buffer);
-
-        let result = MyNoSqlTcpContract::deserialize(&mut socket_reader)
-            .await
-            .unwrap()
-            .decompress_if_compressed()
-            .await
-            .unwrap();
-
-        assert_is_big_init_table(result);
+        contract.serialize(&mut buffer);
+        buffer
     }
 
-    #[cfg(feature = "zstd")]
+    /// Bytes nothing can make smaller.
+    #[cfg(feature = "compression")]
+    fn noise(size: usize) -> Vec<u8> {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        (0..size)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "compression")]
+    fn is_stream(level: CompressionLevel) -> bool {
+        matches!(level.packing(), Some(Packing::ZstdStream { .. }))
+    }
+
+    #[cfg(feature = "compression")]
     #[test]
-    fn test_compress_with_none_keeps_the_packet() {
-        let result = big_init_table().compress_if_makes_sense(TcpCompression::None);
-        assert_is_big_init_table(result);
+    fn test_pack_packs_with_the_level_of_the_packer() {
+        let packet = big_init_table();
+        let bytes = serialized(&packet);
+
+        for level in CompressionLevel::all() {
+            match packet.pack(&mut BatchPacker::new(level)) {
+                None => assert!(!level.is_on(), "level {level}"),
+                Some(MyNoSqlTcpContract::CompressedPayload(batch)) => {
+                    assert!(level.is_on(), "level {level}");
+                    assert!(batch.len() < bytes.len() / 10, "level {level}");
+                    assert_eq!(BatchUnpacker::new().read_batch(&batch).unwrap(), bytes);
+                }
+                Some(other) => panic!("level {level}: {other:?}"),
+            }
+        }
     }
 
-    #[tokio::test]
-    async fn test_broken_compressed_payload_is_an_error_not_a_panic() {
-        let result = MyNoSqlTcpContract::CompressedPayload(vec![0xff, 0xff, 0xff, 0xff])
-            .decompress_if_compressed()
-            .await;
+    #[cfg(feature = "compression")]
+    #[test]
+    fn test_pack_leaves_what_does_not_pack_as_it_is() {
+        let noise_table = MyNoSqlTcpContract::InitTable {
+            table_name: "files".to_string(),
+            data: noise(100_000),
+        };
 
-        assert!(result.is_err());
+        for level in CompressionLevel::all() {
+            let mut packer = BatchPacker::new(level);
+
+            // Too small to pack
+            assert!(MyNoSqlTcpContract::Ping.pack(&mut packer).is_none());
+
+            // Packed already
+            let packed = MyNoSqlTcpContract::CompressedPayload(vec![b'a'; 10_000]);
+            assert!(packed.pack(&mut packer).is_none(), "level {level}");
+
+            // Nothing to save. A stream takes it whatever it makes of it: it is what the next
+            // packets are packed with.
+            assert_eq!(
+                is_stream(level),
+                noise_table.pack(&mut packer).is_some(),
+                "level {level}"
+            );
+        }
+    }
+
+    /// At the levels 6 to 9 what does not pack goes into the stream, and the batch is bigger
+    /// than the packet and a byte: `pack` checks the length of the packet against
+    /// `max_batch_len`.
+    #[cfg(feature = "compression")]
+    #[test]
+    fn test_a_batch_is_never_bigger_than_max_batch_len() {
+        let packet = noise(3 * 1024 * 1024);
+
+        for level in CompressionLevel::all() {
+            let mut wire = Vec::new();
+            BatchPacker::new(level).write_batch(&packet, &mut wire);
+
+            assert!(
+                wire.len() <= super::max_batch_len(packet.len()),
+                "level {level}"
+            );
+
+            if is_stream(level) {
+                assert!(wire.len() > packet.len() + 1, "level {level}");
+            }
+        }
     }
 }

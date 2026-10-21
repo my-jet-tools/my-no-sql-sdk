@@ -10,3 +10,8 @@ members = [
     "my-no-sql-tests",
     "my-no-sql-server-core",
 ]
+
+# Zstandard is C built with the optimization of the profile: without any it packs the server
+# -> node link ten times slower, and the tests which push data through it take as long.
+[profile.dev.package.zstd-sys]
+opt-level = 3

@@ -115,7 +115,7 @@ impl SocketEventCallback<MyNoSqlTcpContract, MyNoSqlReaderTcpSerializer, ()> for
             MyNoSqlTcpContract::GreetingFromNode {
                 node_location: _,
                 node_version: _,
-                compression: _,
+                compress: _,
             } => {}
             MyNoSqlTcpContract::SubscribeAsNode(_) => {}
             MyNoSqlTcpContract::Unsubscribe(_) => {}

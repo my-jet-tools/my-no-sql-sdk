@@ -13,9 +13,11 @@ tokio = { version = "*", features = ["full"] }
 tokio-util = "*"
 parking_lot = "*"
 async-trait = "*"
-# Compression of the server -> node link (see `payload_compressor`). zstd is a C library,
-# so it is optional: the SDK turns it on for `master-node` / `read-node` only.
-zstd = { version = "*", optional = true }
+# Compression of the server -> node link (see `compression` and `batch`): the packing of the
+# my-reverse-proxy gateway. LZ4 and Zstandard are C libraries, so they are optional: the SDK
+# turns them on for `master-node` / `read-node` only.
+lz4 = { version = "1", optional = true }
+zstd = { version = "0.14", default-features = false, optional = true }
 
 [features]
-zstd = ["dep:zstd"]
+compression = ["dep:lz4", "dep:zstd"]
